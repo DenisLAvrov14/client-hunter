@@ -4,11 +4,12 @@ import type { PageContext, PageKind } from './types.js';
 
 // Order = priority when the page budget is tight.
 const KIND_RULES: [PageKind, RegExp][] = [
-  ['contact', /contact|get-in-touch|kontakt|контакт|enquir/i],
-  ['catalog', /catalog|catalogue|products|range|shop|collections|brochure|каталог|продукц|товар/i],
-  ['quote', /quote|quotation|request-a-price|offerte|прайс|цен[аы]/i],
-  ['legal', /terms|legal|privacy|impressum|imprint|disclaimer|cookie|реквизит/i],
-  ['about', /about|who-we-are|company|over-ons|о-компании|о-нас/i],
+  // EN / NL / RU words, plus RU transliterations common in URLs (kontakty, katalog, o-kompanii).
+  ['contact', /contact|get-in-touch|kontakt|контакт|enquir|svyaz|связь/i],
+  ['catalog', /catalog|catalogue|catalogus|products|producten|assortiment|range|shop|collections|brochure|katalog|produkc|tovar|каталог|продукц|товар/i],
+  ['quote', /quote|quotation|request-a-price|offerte|prijs|price|prais|прайс|цен[аы]/i],
+  ['legal', /terms|legal|privacy|impressum|imprint|disclaimer|cookie|voorwaarden|privacybeleid|rekvizit|реквизит/i],
+  ['about', /about|who-we-are|company|over-ons|over-|o-kompanii|o-nas|о-компании|о-нас|о компании/i],
 ];
 
 const SKIP = /\.(pdf|jpe?g|png|gif|webp|svg|zip|docx?|xlsx?)(\?|$)|\/(cart|checkout|account|login|basket|wp-admin)\b/i;

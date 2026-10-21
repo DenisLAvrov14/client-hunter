@@ -28,10 +28,12 @@ describe('loadConfig', () => {
     expect(config.markets.get('UK')?.registry).toBe('companies_house');
   });
 
-  it('ships with every market legally unreviewed and only UK enabled', () => {
+  it('ships with every market legally unreviewed (sending blocked) and discovery cities set', () => {
     const config = loadConfig(realConfig);
-    for (const m of config.markets.values()) expect(m.legal_review_done).toBe(false);
-    expect([...config.markets.values()].filter((m) => m.enabled).map((m) => m.code)).toEqual(['UK']);
+    for (const m of config.markets.values()) {
+      expect(m.legal_review_done).toBe(false);
+      if (m.enabled) expect(m.discovery_cities.length).toBeGreaterThan(0);
+    }
   });
 
   it('keeps RU and KZ in permission_request mode with a single follow-up', () => {

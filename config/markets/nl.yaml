@@ -1,6 +1,6 @@
 # spec 3.4. Telecommunicatiewet 11.7: legal persons (B.V., N.V.) only; eenmanszaak and VOF are excluded.
 code: NL
-enabled: false
+enabled: true                   # discovery only; sending stays blocked by legal_review_done
 legal_review_done: false
 language: en                    # Dutch A/B test planned for Phase 5
 timezone: Europe/Amsterdam
@@ -18,3 +18,4 @@ allow_freemail_addresses: false
 entity_markers_allow: ["B.V.", "BV", "N.V.", "NV"]
 entity_markers_deny: ["eenmanszaak", "VOF", "V.O.F."]
 registry: none
+discovery_cities: [Amsterdam, Rotterdam, Eindhoven]

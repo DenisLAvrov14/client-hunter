@@ -3,7 +3,8 @@
 import { hasInquiryForm, hasSiteSearch, mailtoAddresses, pageLinks } from './page.js';
 import type { ObservationDraft, PageContext } from './types.js';
 
-const CATALOG_PDF_TEXT = /catalog|catalogue|brochure|price\s*-?\s*list|pricelist|prices|product\s+guide|каталог|прайс/i;
+const CATALOG_PDF_TEXT =
+  /catalog|catalogue|catalogus|brochure|price\s*-?\s*list|pricelist|prijslijst|prices|product\s+guide|katalog|prais|каталог|прайс/i;
 
 export function checkPdfCatalog(pages: PageContext[]): ObservationDraft | null {
   for (const page of pages) {
@@ -24,7 +25,7 @@ export function checkPdfCatalog(pages: PageContext[]): ObservationDraft | null {
 }
 
 const PRICE_ON_REQUEST =
-  /price on (application|request)|\bPOA\b|call for (a )?price|request (a )?price|contact us for (a )?(price|pricing|quote)|цена по запросу|цену уточняйте|узнать цену/i;
+  /price on (application|request)|\bPOA\b|call for (a )?price|request (a )?price|contact us for (a )?(price|pricing|quote)|prijs op aanvraag|op aanvraag|цена по запросу|цену уточняйте|узнать цену|цена договорная/i;
 
 export function checkNoQuoteForm(pages: PageContext[]): ObservationDraft | null {
   for (const page of pages) {

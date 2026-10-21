@@ -1,7 +1,7 @@
 # spec 3.5. HIGH RISK: 38-FZ art. 18 requires prior consent for advertising by email.
 # Sending is blocked until the operator sets legal_review_done after a lawyer's review.
 code: RU
-enabled: false
+enabled: true                   # discovery only; sending stays blocked by legal_review_done
 legal_review_done: false
 requires_manual_legal_review: true
 language: ru
@@ -20,3 +20,4 @@ allow_freemail_addresses: false
 entity_markers_allow: ["ООО", "АО", "ПАО"]
 entity_markers_deny: ["ИП"]
 registry: none
+discovery_cities: ["Москва", "Санкт-Петербург"]  # OSM names

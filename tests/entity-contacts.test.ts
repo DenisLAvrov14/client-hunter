@@ -103,8 +103,9 @@ describe('sources', () => {
   });
 
   it('builds an Overpass query for tags with a website', () => {
-    const q = buildOverpassQuery('Manchester', ['shop=trade', 'industrial=*'], 120);
-    expect(q).toContain('area["name"="Manchester"]["boundary"="administrative"]->.city;');
+    const q = buildOverpassQuery('UK', 'Manchester', ['shop=trade', 'industrial=*'], 120);
+    expect(q).toContain('area["ISO3166-1"="GB"]["admin_level"="2"]->.country;');
+    expect(q).toContain('rel(area.country)["boundary"="administrative"]["name"="Manchester"];');
     expect(q).toContain('nwr["shop"="trade"]["website"](area.city);');
     expect(q).toContain('nwr["industrial"]["contact:website"](area.city);');
   });

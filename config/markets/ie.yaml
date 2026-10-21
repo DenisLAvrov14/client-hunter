@@ -1,6 +1,6 @@
 # spec 3.3. ePrivacy S.I. 336/2011 Reg. 13 + GDPR. Role addresses of companies only.
 code: IE
-enabled: false
+enabled: true                   # discovery only; sending stays blocked by legal_review_done
 legal_review_done: false
 language: en
 timezone: Europe/Dublin
@@ -18,3 +18,4 @@ allow_freemail_addresses: false
 entity_markers_allow: ["Limited", "Ltd", "DAC", "Teoranta", "Teo"]
 entity_markers_deny: ["sole trader"]
 registry: none
+discovery_cities: [Dublin, Cork, Galway]

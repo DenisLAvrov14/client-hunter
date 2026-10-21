@@ -39,6 +39,15 @@ describe('HTML checks', () => {
     expect(checkNoQuoteForm([home])).toMatchObject({ code: 'NO_QUOTE_FORM', status: 'verified', evidenceDetail: 'POA' });
   });
 
+  it('NO_QUOTE_FORM and PDF_CATALOG in Dutch and Russian', () => {
+    const nl = buildPageContext(BASE, 'catalog', 200, '<p>Prijs op aanvraag</p><a href="mailto:info@x.nl">mail</a><a href="/files/prijslijst.pdf">Download</a>');
+    expect(checkNoQuoteForm([nl])?.code).toBe('NO_QUOTE_FORM');
+    expect(checkPdfCatalog([nl])?.code).toBe('PDF_CATALOG');
+    const ru = buildPageContext(BASE, 'catalog', 200, '<p>Цена по запросу</p><a href="tel:+7495">звоните</a><a href="/doc/1.pdf">Скачать прайс-лист</a>');
+    expect(checkNoQuoteForm([ru])?.code).toBe('NO_QUOTE_FORM');
+    expect(checkPdfCatalog([ru])?.code).toBe('PDF_CATALOG');
+  });
+
   it('NO_QUOTE_FORM: not reported when an enquiry form exists', () => {
     const page = buildPageContext(
       BASE,

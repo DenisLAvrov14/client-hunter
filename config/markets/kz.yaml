@@ -1,6 +1,6 @@
 # spec 3.6. Same profile as RU until the advertising-law check is done.
 code: KZ
-enabled: false
+enabled: true                   # discovery only; sending stays blocked by legal_review_done
 legal_review_done: false
 requires_manual_legal_review: true
 language: ru
@@ -19,3 +19,4 @@ allow_freemail_addresses: false
 entity_markers_allow: ["ТОО", "АО"]
 entity_markers_deny: ["ИП"]
 registry: none
+discovery_cities: ["Алматы", "Астана"]          # OSM names; Karaganda not found under its common spellings

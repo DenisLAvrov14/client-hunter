@@ -10,8 +10,15 @@ interface OverpassElement {
   tags?: Record<string, string>;
 }
 
-/** Builds an Overpass QL query for elements with a website in the named city. */
-export function buildOverpassQuery(city: string, osmTags: string[], timeoutS: number): string {
+// OSM country areas carry ISO 3166-1 codes; our UK market is GB there.
+const ISO_COUNTRY: Record<MarketCode, string> = { UK: 'GB', IE: 'IE', NL: 'NL', KZ: 'KZ', RU: 'RU' };
+
+/**
+ * Builds an Overpass QL query for elements with a website in the named city. City names are
+ * not unique worldwide (London, Ontario; Dublin, Ohio), so the city is looked up inside the
+ * market's country first.
+ */
+export function buildOverpassQuery(market: MarketCode, city: string, osmTags: string[], timeoutS: number): string {
   const safeCity = city.replace(/["\\]/g, '');
   const selectors = osmTags.flatMap((tag) => {
     const [key, value] = tag.split('=') as [string, string];
@@ -20,7 +27,9 @@ export function buildOverpassQuery(city: string, osmTags: string[], timeoutS: nu
   });
   return [
     `[out:json][timeout:${timeoutS}];`,
-    `area["name"="${safeCity}"]["boundary"="administrative"]->.city;`,
+    `area["ISO3166-1"="${ISO_COUNTRY[market]}"]["admin_level"="2"]->.country;`,
+    `rel(area.country)["boundary"="administrative"]["name"="${safeCity}"];`,
+    'map_to_area->.city;',
     '(',
     ...selectors.map((s) => `  ${s}`),
     ');',
@@ -54,7 +63,7 @@ export class OsmSource implements DiscoverySource {
 
   async *discover(params: DiscoveryParams): AsyncIterable<CandidateCompany> {
     for (const city of params.cities) {
-      const query = buildOverpassQuery(city, params.segment.osm_tags, this.timeoutS);
+      const query = buildOverpassQuery(params.market, city, params.segment.osm_tags, this.timeoutS);
       let elements: OverpassElement[];
       try {
         elements = await this.run(query);
