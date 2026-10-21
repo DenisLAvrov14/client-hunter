@@ -1,0 +1,42 @@
+# Email copy rules (spec 9.3, 10). Enforced by code, not by the LLM.
+limits:
+  subject_max_words: 7
+  first_email_max_words: 120
+  followup_1_max_words: 60
+  followup_2_max_words: 40
+
+# Case-insensitive, matched as whole words/phrases (so "бот" does not hit "работа").
+banned_terms:
+  - lose
+  - losing
+  - revenue
+  - roi
+  - conversion
+  - выручка
+  - теряете
+  - конверсия
+  - гарантирую
+  - synergy
+  - quick question
+  - i hope this email finds you well
+  - i came across your website
+  - ai
+  - бот
+
+# Any digit, percent or currency sign in the body fails validation (spec 9.3).
+# Checked on body text with allowed URLs stripped, so digits inside domains don't trip it.
+banned_patterns:
+  - "\\d"
+  - "%"
+  - "[£€$₽₸]"
+
+# Opt-out line appended by code (spec 10.3). NL falls back to EN until a native speaker checks the translation.
+opt_out:
+  en: "If this isn't relevant, just reply \"no\" and I won't contact you again."
+  ru: "Если неактуально — просто ответьте «нет», и я больше не напишу."
+  nl: "If this isn't relevant, just reply \"no\" and I won't contact you again."
+
+# Links allowed in addition to the recipient's own site and SENDER_WEBSITE.
+allowed_link_hosts:
+  - pinpinpin.it
+  - cryptovigil.net

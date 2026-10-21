@@ -1,0 +1,49 @@
+# Deterministic scoring (spec 5.5). Weights are NOT calibrated yet — tune from operator decisions (spec 16).
+weights:
+  friction: 0.30
+  trigger: 0.20
+  benefit: 0.20
+  capacity: 0.15
+  fit: 0.10
+  contact: 0.05
+
+# friction_score: best verified observation + bonus for a second one.
+friction:
+  second_signal_bonus: 15
+  by_code:
+    PDF_CATALOG: 80
+    NO_QUOTE_FORM: 85
+    NO_SITE_SEARCH: 70
+    MOBILE_OVERFLOW: 75
+    NO_VIEWPORT_META: 70
+    SLOW_MOBILE: 60
+    BROKEN_INTERNAL_LINKS: 65
+    BROKEN_IMAGES: 60
+    NO_HTTPS: 50
+    SSL_ERROR: 55
+
+# benefit_score fallback when the LLM does not provide one: how directly the signal touches sales.
+benefit_default_by_code:
+  NO_QUOTE_FORM: 85
+  PDF_CATALOG: 75
+  NO_SITE_SEARCH: 65
+  MOBILE_OVERFLOW: 70
+  NO_VIEWPORT_META: 65
+  SLOW_MOBILE: 55
+  BROKEN_INTERNAL_LINKS: 50
+  BROKEN_IMAGES: 45
+  NO_HTTPS: 40
+  SSL_ERROR: 45
+
+trigger:
+  job_posting: 80
+  new_site: 50
+  new_location: 50
+  other: 30
+
+contact:
+  sales: 100
+  enquiries: 85
+  info: 70
+  named: 60
+  support: 40

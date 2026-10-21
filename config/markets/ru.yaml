@@ -1,0 +1,22 @@
+# spec 3.5. HIGH RISK: 38-FZ art. 18 requires prior consent for advertising by email.
+# Sending is blocked until the operator sets legal_review_done after a lawyer's review.
+code: RU
+enabled: false
+legal_review_done: false
+requires_manual_legal_review: true
+language: ru
+timezone: Europe/Moscow
+currency: RUB
+# days: ISO weekdays (1 = Mon). Tue–Fri is a hypothesis (spec 3.7).
+send_window_local: { days: [2, 3, 4, 5], from: "10:00", to: "16:00" }
+daily_cap: 8
+first_touch_mode: permission_request
+followups: 1
+followup_delays_days: [5]
+require_corporate_entity: true
+require_registry_check: false
+allow_named_business_address: false
+allow_freemail_addresses: false
+entity_markers_allow: ["ООО", "АО", "ПАО"]
+entity_markers_deny: ["ИП"]
+registry: none

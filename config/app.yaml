@@ -1,0 +1,8 @@
+# Global application settings.
+operator_timezone: Europe/Moscow   # TODO(operator): confirm your timezone
+review_time_local: "10:00"         # morning review queue in Telegram
+summary_time_local: "20:00"        # evening summary
+queue_score_threshold: 60          # spec 5.5: min score to reach the operator
+data_dir: data
+db_file: data/client-hunter.sqlite
+backups_keep: 14

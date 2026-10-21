@@ -1,0 +1,35 @@
+# spec 4.1 S2. B2B distributors and manufacturers.
+code: S2
+name: B2B distributors and manufacturers
+markets: [UK, IE, NL, KZ, RU]
+min_catalog_items: 100
+osm_tags:
+  - shop=trade
+  - shop=hardware
+  - shop=doityourself
+  - craft=metal_construction
+  - craft=window_construction
+  - craft=carpenter
+  - craft=joiner
+  - industrial=*
+  - office=company
+# UK SIC 2007 codes for Companies House search.
+sic_codes_uk:
+  - "46720"   # wholesale of metals and metal ores
+  - "46730"   # wholesale of wood, construction materials and sanitary equipment
+  - "46740"   # wholesale of hardware, plumbing and heating equipment
+  - "46690"   # wholesale of other machinery and equipment
+  - "46620"   # wholesale of machine tools
+  - "45310"   # wholesale trade of motor vehicle parts and accessories
+  - "25110"   # manufacture of metal structures
+  - "25120"   # manufacture of doors and windows of metal
+  - "25940"   # manufacture of fasteners and screw machine products
+  - "16230"   # manufacture of other builders' carpentry and joinery
+  - "22230"   # manufacture of builders' ware of plastic
+  - "22220"   # manufacture of plastic packing goods
+  - "17211"   # manufacture of corrugated paper and paperboard, sacks and bags
+  - "31090"   # manufacture of other furniture
+job_queries:                     # Phase 5 (Adzuna / hh)
+  en: ["order processing", "sales administrator", "data entry", "customer service coordinator"]
+  ru: ["оператор обработки заявок", "менеджер по обработке заявок", "менеджер по работе с клиентами"]
+search_queries: []

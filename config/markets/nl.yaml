@@ -1,0 +1,20 @@
+# spec 3.4. Telecommunicatiewet 11.7: legal persons (B.V., N.V.) only; eenmanszaak and VOF are excluded.
+code: NL
+enabled: false
+legal_review_done: false
+language: en                    # Dutch A/B test planned for Phase 5
+timezone: Europe/Amsterdam
+currency: EUR
+# days: ISO weekdays (1 = Mon). Tue–Fri is a hypothesis (spec 3.7).
+send_window_local: { days: [2, 3, 4, 5], from: "09:30", to: "15:30" }
+daily_cap: 10
+first_touch_mode: offer
+followups: 2
+followup_delays_days: [4, 9]
+require_corporate_entity: true
+require_registry_check: false   # KVK API not used at start; entity type from the site
+allow_named_business_address: false
+allow_freemail_addresses: false
+entity_markers_allow: ["B.V.", "BV", "N.V.", "NV"]
+entity_markers_deny: ["eenmanszaak", "VOF", "V.O.F."]
+registry: none

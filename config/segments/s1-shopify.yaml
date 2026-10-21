@@ -1,0 +1,25 @@
+# spec 4.1 S1. Shopify is detected during inspection; discovery only supplies domains.
+code: S1
+name: Shopify stores (SMB)
+markets: [UK, IE, NL]
+min_products: 30
+exclude_below_products: 10
+osm_tags:                        # retail shops with a website tag
+  - shop=clothes
+  - shop=shoes
+  - shop=jewelry
+  - shop=gift
+  - shop=cosmetics
+  - shop=beauty
+  - shop=furniture
+  - shop=interior_decoration
+  - shop=outdoor
+  - shop=sports
+  - shop=pet
+  - shop=toys
+  - shop=bicycle
+  - shop=coffee
+  - shop=tea
+  - shop=wine
+search_queries: []               # Phase 5, search API
+job_queries: []

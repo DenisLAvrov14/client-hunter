@@ -1,0 +1,24 @@
+# Productized offers (spec 4.2). Prices are starting hypotheses — the operator edits them.
+# Prices never appear in a first-touch email; they are used for prioritization and operator replies.
+offers:
+  O1:
+    name: Shopify Fix Sprint
+    duration_weeks: [1, 2]
+    portfolio: https://pinpinpin.it
+    prices:
+      GBP: [600, 1500]
+      EUR: [700, 1800]
+  O2:
+    name: Catalogue + quote-request basket (B2B)
+    duration_weeks: [2, 3]
+    portfolio: https://pinpinpin.it
+    prices:
+      GBP: [1500, 4000]
+      EUR: [1700, 4600]
+  O3:
+    name: Inbound request automation
+    duration_weeks: [1, 2]
+    portfolio: https://cryptovigil.net
+    prices:
+      GBP: [800, 2500]
+      EUR: [900, 2900]

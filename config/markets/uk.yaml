@@ -1,0 +1,20 @@
+# spec 3.2. PECR: corporate subscribers only (Ltd, PLC, LLP); sole traders / ordinary partnerships need consent.
+code: UK
+enabled: true
+legal_review_done: false        # operator sets manually after docs/legal/lia-uk.md
+language: en
+timezone: Europe/London
+currency: GBP
+# days: ISO weekdays (1 = Mon). Tue–Fri is a hypothesis (spec 3.7).
+send_window_local: { days: [2, 3, 4, 5], from: "09:30", to: "15:30" }
+daily_cap: 15
+first_touch_mode: offer
+followups: 2
+followup_delays_days: [4, 9]
+require_corporate_entity: true
+require_registry_check: true
+allow_named_business_address: true
+allow_freemail_addresses: false
+entity_markers_allow: ["Ltd", "Limited", "PLC", "LLP"]
+entity_markers_deny: ["sole trader"]
+registry: companies_house

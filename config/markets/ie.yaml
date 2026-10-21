@@ -1,0 +1,20 @@
+# spec 3.3. ePrivacy S.I. 336/2011 Reg. 13 + GDPR. Role addresses of companies only.
+code: IE
+enabled: false
+legal_review_done: false
+language: en
+timezone: Europe/Dublin
+currency: EUR
+# days: ISO weekdays (1 = Mon). Tue–Fri is a hypothesis (spec 3.7).
+send_window_local: { days: [2, 3, 4, 5], from: "09:30", to: "15:30" }
+daily_cap: 10
+first_touch_mode: offer
+followups: 2
+followup_delays_days: [4, 9]
+require_corporate_entity: true
+require_registry_check: false   # CRO access not verified yet
+allow_named_business_address: false
+allow_freemail_addresses: false
+entity_markers_allow: ["Limited", "Ltd", "DAC", "Teoranta", "Teo"]
+entity_markers_deny: ["sole trader"]
+registry: none
