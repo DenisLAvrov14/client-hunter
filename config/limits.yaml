@@ -10,3 +10,5 @@ max_llm_calls_per_run: 60
 max_llm_cost_usd_per_run: 3
 max_llm_cost_usd_per_month: 40
 max_queue_per_day: 10
+max_nav_links_checked: 10        # BROKEN_INTERNAL_LINKS; spec allows up to 20
+overpass_timeout_s: 120

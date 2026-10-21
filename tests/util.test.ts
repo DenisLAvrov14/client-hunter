@@ -38,6 +38,12 @@ describe('parsePipelineArgs', () => {
       market: 'UK',
       segment: 'S2',
       limit: 50,
+      discover: true,
+      browser: true,
+    });
+    expect(parsePipelineArgs(['--market', 'UK', '--segment', 'S2', '--no-discovery', '--no-browser'], 100)).toMatchObject({
+      discover: false,
+      browser: false,
     });
   });
 

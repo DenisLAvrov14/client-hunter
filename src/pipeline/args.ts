@@ -1,15 +1,19 @@
 import { parseArgs } from 'node:util';
 import { MARKET_CODES, MarketCode, SEGMENT_CODES, SegmentCode } from '../config/schema.js';
 
-export const PIPELINE_USAGE = `Usage: npm run pipeline -- --market <${MARKET_CODES.join('|')}> --segment <${SEGMENT_CODES.join('|')}> [--limit N]
+export const PIPELINE_USAGE = `Usage: npm run pipeline -- --market <${MARKET_CODES.join('|')}> --segment <${SEGMENT_CODES.join('|')}> [options]
 
-Runs discovery -> inspection -> contacts for one market and segment.
+Finds companies in OpenStreetMap for the market's discovery_cities, then inspects their
+sites, detects the legal entity and extracts contacts. Nothing is sent anywhere: results
+are printed to the console and saved to data/reports/.
 
 Options:
-  --market   market code (must be enabled in config/markets/*.yaml)
-  --segment  segment code (config/segments/*.yaml)
-  --limit    max companies this run (default: limits.max_companies_per_run)
-  --help     show this help
+  --market        market code (must be enabled in config/markets/*.yaml)
+  --segment       segment code (config/segments/*.yaml)
+  --limit N       companies to inspect this run (default: limits.max_companies_per_run)
+  --no-discovery  skip OpenStreetMap; inspect companies already in the database
+  --no-browser    skip Playwright mobile checks (faster, no screenshots)
+  --help          show this help
 `;
 
 export interface PipelineArgs {
@@ -18,9 +22,14 @@ export interface PipelineArgs {
   limit: number;
 }
 
+export interface PipelineCliArgs extends PipelineArgs {
+  discover: boolean;
+  browser: boolean;
+}
+
 export class UsageError extends Error {}
 
-export function parsePipelineArgs(argv: string[], maxLimit: number): PipelineArgs | 'help' {
+export function parsePipelineArgs(argv: string[], maxLimit: number): PipelineCliArgs | 'help' {
   let values;
   try {
     ({ values } = parseArgs({
@@ -29,6 +38,8 @@ export function parsePipelineArgs(argv: string[], maxLimit: number): PipelineArg
         market: { type: 'string' },
         segment: { type: 'string' },
         limit: { type: 'string' },
+        'no-discovery': { type: 'boolean' },
+        'no-browser': { type: 'boolean' },
         help: { type: 'boolean', short: 'h' },
       },
       strict: true,
@@ -47,5 +58,11 @@ export function parsePipelineArgs(argv: string[], maxLimit: number): PipelineArg
   if (!Number.isInteger(limit) || limit < 1) throw new UsageError('--limit must be a positive integer');
   if (limit > maxLimit) throw new UsageError(`--limit exceeds limits.max_companies_per_run (${maxLimit})`);
 
-  return { market: market.data, segment: segment.data, limit };
+  return {
+    market: market.data,
+    segment: segment.data,
+    limit,
+    discover: !values['no-discovery'],
+    browser: !values['no-browser'],
+  };
 }

@@ -11,6 +11,8 @@
     "pipeline": "tsx src/cli/pipeline.ts",
     "migrate": "tsx src/cli/migrate.ts",
     "check-config": "tsx src/cli/check-config.ts",
+    "import-csv": "tsx src/cli/import-csv.ts",
+    "report:candidates": "tsx src/cli/report.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
@@ -18,9 +20,13 @@
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",
+    "cheerio": "^1.2.0",
     "dotenv": "^18.0.8",
     "nanoid": "^6.0.2",
+    "p-limit": "^7.3.3",
     "pino": "^10.4.0",
+    "playwright": "^1.64.1",
+    "robots-parser": "^3.0.1",
     "tldts": "^7.4.19",
     "yaml": "^2.9.1",
     "zod": "^4.6.7"

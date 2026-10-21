@@ -37,6 +37,8 @@ export const AppSchema = z.strictObject({
   data_dir: z.string().min(1),
   db_file: z.string().min(1),
   backups_keep: z.number().int().positive(),
+  user_agent: z.string().min(10),
+  robots_token: z.string().regex(/^[A-Za-z][\w-]*$/),
 });
 
 export const LimitsSchema = z.strictObject({
@@ -51,6 +53,8 @@ export const LimitsSchema = z.strictObject({
   max_llm_cost_usd_per_run: z.number().min(0),
   max_llm_cost_usd_per_month: z.number().min(0),
   max_queue_per_day: z.number().int().positive(),
+  max_nav_links_checked: z.number().int().min(0).max(20),
+  overpass_timeout_s: z.number().int().positive().max(180),
 });
 
 const TokenPrice = z.strictObject({
