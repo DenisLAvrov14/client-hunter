@@ -15,7 +15,7 @@ import {
 import { detectEntity } from '../entity/detect.js';
 import { runHtmlChecks } from '../inspect/checks.js';
 import { FetchError, type Fetcher, type FetchResult } from '../inspect/fetcher.js';
-import { checkBrokenNavLinks } from '../inspect/links.js';
+import { checkBrokenNavLinks, confirmBrokenImages } from '../inspect/links.js';
 import type { MobileInspector, MobileTarget } from '../inspect/mobile.js';
 import { buildPageContext, hasInquiryForm } from '../inspect/page.js';
 import { pickPages } from '../inspect/pagePicker.js';
@@ -185,7 +185,14 @@ export async function processCompany(company: CompanyRow, deps: ProcessDeps): Pr
     if (deps.mobile) {
       const targets: MobileTarget[] = [{ url: home.url, kind: 'home' }];
       for (const p of pages) if ((p.kind === 'contact' || p.kind === 'quote') && hasInquiryForm(p)) targets.push({ url: p.url, kind: 'form' });
-      observations.push(...(await deps.mobile.inspect(targets, path.join(deps.screenshotRoot, company.id))));
+      for (const o of await deps.mobile.inspect(targets, path.join(deps.screenshotRoot, company.id))) {
+        if (o.code !== 'BROKEN_IMAGES') {
+          observations.push(o);
+          continue;
+        }
+        const confirmed = await confirmBrokenImages(o, company.domain, fetcher);
+        if (confirmed) observations.push(confirmed);
+      }
     }
     for (const o of observations) insertObservation(db, company.id, o);
     result.verified = observations.filter((o) => o.status === 'verified').map((o) => o.code);

@@ -126,6 +126,8 @@ export class PlaywrightInspector implements MobileInspector {
               .slice(0, 10),
           );
           if (broken.length > 0) {
+            // Only a suspicion: lazy-loaders and tracking pixels also report naturalWidth 0.
+            // processCompany confirms each URL over HTTP before this becomes `verified`.
             const shot = path.join(screenshotDir, 'broken-images.png');
             await page.evaluate((src) => {
               const img = [...document.images].find((i) => i.currentSrc === src);
@@ -134,10 +136,10 @@ export class PlaywrightInspector implements MobileInspector {
             await page.screenshot({ path: shot, fullPage: false });
             found.push({
               code: 'BROKEN_IMAGES',
-              status: 'verified',
-              description: `${broken.length} image(s) on the home page fail to load`,
+              status: 'unknown',
+              description: `${broken.length} image(s) on the home page did not render`,
               evidenceUrl: target.url,
-              evidenceDetail: broken.join('\n'),
+              evidenceDetail: [...new Set(broken)].join('\n'),
               screenshotPath: shot,
             });
           }

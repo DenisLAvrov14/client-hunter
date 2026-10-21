@@ -6,6 +6,7 @@ import { openDb } from '../src/db/connection.js';
 import { migrate } from '../src/db/migrate.js';
 import { upsertDiscovered, type CompanyRow } from '../src/db/repo.js';
 import { DomainThrottle, FetchError, type Fetcher, type FetchOptions, type FetchResult } from '../src/inspect/fetcher.js';
+import { confirmBrokenImages } from '../src/inspect/links.js';
 import { processCompany, type ProcessDeps } from '../src/pipeline/processCompany.js';
 
 const config = loadConfig();
@@ -126,6 +127,30 @@ describe('processCompany', () => {
       [`${ORIGIN}/`]: [200, html, '<p>Welcome to our shop. Email <a href="mailto:info@northbridge-example.co.uk">us</a>.</p>'],
     });
     expect(await processCompany(company, deps)).toMatchObject({ status: 'rejected_auto', reason: 'entity_unknown' });
+  });
+});
+
+describe('confirmBrokenImages', () => {
+  it('keeps only own-domain images that are really missing on the server', async () => {
+    const fetcher = new FakeFetcher({
+      [`${ORIGIN}/img/ok.png`]: [200, 'image/png', ''],
+      [`${ORIGIN}/img/gone.png`]: [404, 'text/html', ''],
+    });
+    const suspicion = {
+      code: 'BROKEN_IMAGES' as const,
+      status: 'unknown' as const,
+      description: 'x',
+      evidenceDetail: [`${ORIGIN}/img/ok.png`, `${ORIGIN}/img/gone.png`, 'https://bat.bing.com/action/0?ti=1'].join('\n'),
+    };
+    const r = await confirmBrokenImages(suspicion, 'northbridge-example.co.uk', fetcher);
+    expect(r).toMatchObject({ status: 'verified', evidenceDetail: `404 ${ORIGIN}/img/gone.png` });
+    expect(fetcher.requests.some((u) => u.includes('bing.com'))).toBe(false);
+  });
+
+  it('drops the suspicion when every image loads over HTTP (lazy-load artefacts)', async () => {
+    const fetcher = new FakeFetcher({ [`${ORIGIN}/a.png`]: [200, 'image/png', ''] });
+    const suspicion = { code: 'BROKEN_IMAGES' as const, status: 'unknown' as const, description: 'x', evidenceDetail: `${ORIGIN}/a.png` };
+    expect(await confirmBrokenImages(suspicion, 'northbridge-example.co.uk', fetcher)).toBeNull();
   });
 });
 

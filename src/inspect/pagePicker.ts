@@ -8,7 +8,7 @@ const KIND_RULES: [PageKind, RegExp][] = [
   ['contact', /contact|get-in-touch|kontakt|контакт|enquir|svyaz|связь/i],
   ['catalog', /catalog|catalogue|catalogus|products|producten|assortiment|range|shop|collections|brochure|katalog|produkc|tovar|каталог|продукц|товар/i],
   ['quote', /quote|quotation|request-a-price|offerte|prijs|price|prais|прайс|цен[аы]/i],
-  ['legal', /terms|legal|privacy|impressum|imprint|disclaimer|cookie|voorwaarden|privacybeleid|rekvizit|реквизит/i],
+  ['legal', /terms|legal|privacy|impressum|imprint|disclaimer|cookie|voorwaarden|privacybeleid|rekvizit|politika|konfidenc|реквизит|политик/i],
   ['about', /about|who-we-are|company|over-ons|over-|o-kompanii|o-nas|о-компании|о-нас|о компании/i],
 ];
 
