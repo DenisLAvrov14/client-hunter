@@ -18,3 +18,4 @@ allow_freemail_addresses: false
 entity_markers_allow: ["Ltd", "Limited", "PLC", "LLP"]
 entity_markers_deny: ["sole trader"]
 registry: companies_house
+discovery_cities: [London, Manchester, Liverpool]   # S2 discovery via OSM; S1 is not city-bound

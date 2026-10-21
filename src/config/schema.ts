@@ -156,6 +156,7 @@ export const MarketSchema = z
     entity_markers_allow: z.array(z.string().min(1)).min(1),
     entity_markers_deny: z.array(z.string().min(1)),
     registry: z.enum(['companies_house', 'none']),
+    discovery_cities: z.array(z.string().min(1)).default([]),
   })
   .refine((m) => m.followup_delays_days.length === m.followups, {
     message: 'followup_delays_days must have exactly `followups` entries',

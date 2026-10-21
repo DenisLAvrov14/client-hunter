@@ -29,7 +29,6 @@ sic_codes_uk:
   - "22220"   # manufacture of plastic packing goods
   - "17211"   # manufacture of corrugated paper and paperboard, sacks and bags
   - "31090"   # manufacture of other furniture
-job_queries:                     # Phase 5 (Adzuna / hh)
-  en: ["order processing", "sales administrator", "data entry", "customer service coordinator"]
+job_queries:                     # Phase 5, hh only (Adzuna dropped, see docs/verification-log.md)
   ru: ["оператор обработки заявок", "менеджер по обработке заявок", "менеджер по работе с клиентами"]
 search_queries: []
