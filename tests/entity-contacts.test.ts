@@ -57,6 +57,15 @@ describe('detectEntity', () => {
     expect(detectEntity([page('<p>Иванов И.И., ИНН 772012345678</p>')], ru).entityType).toBe('sole_trader');
   });
 
+  it('RU: "ИП" in policy boilerplate is not a sole trader; "ИП Фамилия" is', () => {
+    const boilerplate = '<p>Политика распространяется на юридических лиц и ИП. ООО «Максидом» обрабатывает данные.</p>';
+    expect(detectEntity([page(boilerplate)], ru)).toMatchObject({ entityType: 'ooo', evidence: 'ООО «Максидом»' });
+    expect(detectEntity([page('<p>Продавец: ИП Иванов И.И., ОГРНИП 304770000000000</p>')], ru)).toMatchObject({
+      entityType: 'sole_trader',
+      evidence: expect.stringContaining('ИП Иванов'),
+    });
+  });
+
   it('IE: Limited with CRO number', () => {
     expect(detectEntity([page('<p>Celtic Fixings Limited, CRO No. 123456</p>')], ie)).toMatchObject({
       entityType: 'ltd',

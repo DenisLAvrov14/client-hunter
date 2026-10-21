@@ -50,7 +50,9 @@ function escape(s: string): string {
 /** Marker regex: Latin markers need a capitalised name before them ("Acme Supplies Ltd"); Cyrillic ones precede the name. */
 function markerRegex(marker: string): RegExp {
   const m = escape(marker);
-  if (/[а-яё]/i.test(marker)) return new RegExp(`(?:^|[^\\p{L}])(${m})\\s*[«"“]?[\\p{Lu}0-9]`, 'u');
+  if (/[а-яё]/i.test(marker)) {
+    return new RegExp(`(?:^|[^\\p{L}])(${m}\\s*(?:[«"“][^»"”]{1,60}[»"”]|\\p{Lu}[\\p{L}0-9-]*))`, 'u');
+  }
   // Name words may be wrapped in parentheses: "Emerson Developments (Holdings) Limited".
   return new RegExp(
     `\\b(\\p{Lu}[\\p{L}0-9&'’.-]*(?:\\s+\\(?[\\p{Lu}&][\\p{L}0-9&'’.-]*\\)?){0,6}\\s+${m})(?=$|[^\\p{L}])`,
@@ -79,7 +81,10 @@ export function detectEntity(pages: PageContext[], market: MarketConfig): Entity
 
   for (const page of sorted) {
     for (const deny of market.entity_markers_deny) {
-      const re = new RegExp(`(?:^|[^\\p{L}])${escape(deny)}(?=$|[^\\p{L}])`, 'iu');
+      // "ИП" alone appears in boilerplate ("юрлица и ИП"); require a surname after it: "ИП Иванов И.И.".
+      const re = /[а-яё]/i.test(deny)
+        ? new RegExp(`(?:^|[^\\p{L}])${escape(deny)}\\s+\\p{Lu}\\p{Ll}+(?:\\s+\\p{Lu}\\.\\s*(?:\\p{Lu}\\.)?|\\s+\\p{Lu}\\p{Ll}+){0,2}`, 'u')
+        : new RegExp(`(?:^|[^\\p{L}])${escape(deny)}(?=$|[^\\p{L}])`, 'iu');
       const m = page.text.match(re);
       if (m) return { entityType: 'sole_trader', evidence: m[0].trim(), evidenceUrl: page.url, registryId };
     }
