@@ -1,0 +1,96 @@
+// The only module that talks to the Anthropic API. Everything else depends on LlmClient,
+// so tests use a fake and the provider/model can change without touching callers.
+import Anthropic from '@anthropic-ai/sdk';
+import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
+import type { z } from 'zod';
+
+export interface LlmUsage {
+  inputTokens: number;
+  outputTokens: number; // includes thinking tokens
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+}
+
+export interface LlmRequest<S extends z.ZodType> {
+  model: string;
+  effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+  maxOutputTokens: number;
+  system: string;
+  user: string;
+  schema: S;
+}
+
+export interface LlmResponse<T> {
+  data: T;
+  usage: LlmUsage;
+  model: string;
+}
+
+export type LlmErrorCode = 'refusal' | 'truncated' | 'invalid_output' | 'rate_limited' | 'auth' | 'bad_request' | 'api';
+
+export class LlmError extends Error {
+  constructor(
+    message: string,
+    readonly code: LlmErrorCode,
+    /** Tokens were billed even though the call failed (e.g. truncated or refused output). */
+    readonly usage: LlmUsage | null = null,
+  ) {
+    super(message);
+  }
+
+  /** Worth one more attempt with the same input. */
+  get retryable(): boolean {
+    return this.code === 'truncated' || this.code === 'invalid_output' || this.code === 'rate_limited' || this.code === 'api';
+  }
+}
+
+export interface LlmClient {
+  complete<S extends z.ZodType>(req: LlmRequest<S>): Promise<LlmResponse<z.infer<S>>>;
+}
+
+function usageOf(u: Anthropic.Usage): LlmUsage {
+  return {
+    inputTokens: u.input_tokens,
+    outputTokens: u.output_tokens,
+    cacheReadTokens: u.cache_read_input_tokens ?? 0,
+    cacheWriteTokens: u.cache_creation_input_tokens ?? 0,
+  };
+}
+
+export class AnthropicLlmClient implements LlmClient {
+  private readonly client: Anthropic;
+
+  constructor(opts: { apiKey: string; timeoutMs: number; maxRetries: number }) {
+    this.client = new Anthropic({ apiKey: opts.apiKey, timeout: opts.timeoutMs, maxRetries: opts.maxRetries });
+  }
+
+  async complete<S extends z.ZodType>(req: LlmRequest<S>): Promise<LlmResponse<z.infer<S>>> {
+    let response;
+    try {
+      response = await this.client.messages.parse({
+        model: req.model,
+        max_tokens: req.maxOutputTokens,
+        system: req.system,
+        messages: [{ role: 'user', content: req.user }],
+        output_config: { effort: req.effort, format: zodOutputFormat(req.schema) },
+      });
+    } catch (err) {
+      if (err instanceof Anthropic.AuthenticationError || err instanceof Anthropic.PermissionDeniedError) {
+        throw new LlmError(`API key rejected: ${err.message}`, 'auth');
+      }
+      if (err instanceof Anthropic.RateLimitError) throw new LlmError(err.message, 'rate_limited');
+      if (err instanceof Anthropic.BadRequestError) throw new LlmError(err.message, 'bad_request');
+      if (err instanceof Anthropic.APIError) throw new LlmError(`API error ${err.status ?? ''}: ${err.message}`, 'api');
+      // A schema mismatch surfaces as a parse error from the SDK helper.
+      throw new LlmError(`Invalid model output: ${(err as Error).message}`, 'invalid_output');
+    }
+
+    const usage = usageOf(response.usage);
+    if (response.stop_reason === 'refusal') throw new LlmError('Model declined the request', 'refusal', usage);
+    if (response.stop_reason === 'max_tokens') throw new LlmError('Output truncated at max_tokens', 'truncated', usage);
+    if (response.parsed_output === null || response.parsed_output === undefined) {
+      throw new LlmError('No structured output in response', 'invalid_output', usage);
+    }
+    return { data: response.parsed_output as z.infer<S>, usage, model: response.model };
+  }
+}

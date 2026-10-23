@@ -25,7 +25,7 @@ export function checkPdfCatalog(pages: PageContext[]): ObservationDraft | null {
 }
 
 export const PRICE_ON_REQUEST =
-  /price on (application|request)|\bPOA\b|call for (a )?price|request (a )?price|contact us for (a )?(price|pricing|quote)|prijs op aanvraag|op aanvraag|цена по запросу|цену уточняйте|узнать цену|цена договорная/i;
+  /prices? (available )?(up)?on (application|request)|\bPOA\b|call for (a )?prices?|request (a )?prices?|contact us for (a )?(price|pricing|quote)|prijs op aanvraag|prijzen op aanvraag|op aanvraag|цен[аы] по запросу|цену уточняйте|узнать цену|цена договорная/i;
 
 export function checkNoQuoteForm(pages: PageContext[]): ObservationDraft | null {
   for (const page of pages) {

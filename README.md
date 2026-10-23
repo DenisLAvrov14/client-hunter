@@ -9,7 +9,7 @@
 ## Требования
 - Node.js **24 LTS**
 - Windows или Linux
-- Ключи API для Фазы 1 **не нужны**
+- Ключи API для поиска и проверки сайтов **не нужны**. Для отбора через Claude (`npm run screen`) нужен `ANTHROPIC_API_KEY` в `.env` (отдельный платный API, не подписка Claude)
 
 ## Установка
 ```sh
@@ -42,6 +42,8 @@ npm run pipeline -- --market UK --segment S2 --limit 10
 | `npm run report:candidates -- --market UK` | пересобрать отчёт из базы |
 | `npm run reinspect -- --dry-run` | сколько компаний, отсеянных по старым правилам, будет перепроверено |
 | `npm run reinspect -- --market UK --limit 50` | перепроверить их по новым правилам (без браузера; `--browser` — с мобильными проверками) |
+| `npm run screen -- --dry-run --domain example.co.uk` | показать, что уйдёт в Claude Haiku, и оценку стоимости — **без вызова API** |
+| `npm run screen -- --market UK --limit 10` | этап B: отбор компаний через Claude Haiku (**платно**, ~$0.001 за компанию; лимиты в `config/limits.yaml`) |
 | `npm run import-csv -- --file list.csv --market UK --segment S2` | добавить свои домены (CSV: `website,name,city` или по домену в строке) |
 | `npm run migrate` | применить `migrations/*.sql` |
 | `npm run check-config` | проверить `config/` и флаги из `.env` |

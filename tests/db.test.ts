@@ -6,7 +6,7 @@ import { companiesForReinspection } from '../src/db/repo.js';
 describe('migrate', () => {
   it('creates all spec tables and is idempotent', () => {
     const db = openDb(':memory:');
-    expect(migrate(db)).toEqual(['001_init.sql', '002_opportunities.sql']);
+    expect(migrate(db)).toEqual(['001_init.sql', '002_opportunities.sql', '003_assessments.sql']);
     expect(migrate(db)).toEqual([]);
 
     const tables = db
@@ -32,6 +32,7 @@ describe('migrate', () => {
         'events',
         'inspections',
         'outreach_risk',
+        'assessments',
         'schema_migrations',
       ]),
     );

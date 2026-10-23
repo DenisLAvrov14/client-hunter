@@ -21,6 +21,7 @@ export const ID_PREFIXES = {
   event: 'evt',
   inspection: 'ins',
   outreachRisk: 'ork',
+  assessment: 'asm',
 } as const;
 
 export type IdKind = keyof typeof ID_PREFIXES;

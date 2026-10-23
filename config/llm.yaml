@@ -1,19 +1,29 @@
-# Models and token prices (USD per 1M tokens).
-# Prices from Anthropic pricing as of 2026-10-06; re-check before Phase 2 (see docs/verification-log.md).
-models:
-  classify: claude-haiku-5-5     # L1 classifyBusiness, L3 classifyReply
-  dossier: claude-sonnet-5-5     # L2 buildDossier
+# LLM stages (docs/decisions.md): Claude Haiku via the Anthropic API for both screening (B)
+# and deep analysis (C). Change the model per stage here; the code does not hardcode it.
+stages:
+  screen:                        # stage B: cheap screening of many companies
+    model: claude-haiku-5-5
+    effort: low
+    max_output_tokens: 3000      # includes thinking tokens; truncated answers are retried once
+    digest_max_chars: 6000       # cleaned site text + findings sent per company (~1.5-2K tokens)
+  deep:                          # stage C: shortlisted companies only (not implemented yet)
+    model: claude-haiku-5-5
+    effort: medium
+    max_output_tokens: 8000
+    digest_max_chars: 16000
 
+request_timeout_ms: 60000
+sdk_max_retries: 2               # SDK retries 429/5xx/network errors with backoff
+
+# USD per 1M tokens. Anthropic pricing table cached 2026-10-06 (verify before relying on it):
+# Haiku 5.5 $0.10 in / $0.50 out for prompts up to 100K tokens; thinking is billed as output.
+# Cache prices are not published in that table; we do not rely on caching (prompts are below
+# the minimum cacheable size), the values below only keep the accounting complete.
 prices:
-  claude-haiku-5-5:              # prompts <= 100K tokens; we never exceed that
+  claude-haiku-5-5:
     input: 0.10
     output: 0.50
     cache_read: 0.01
     cache_write: 0.125
-  claude-sonnet-5-5:
-    input: 2.00
-    output: 10.00
-    cache_read: 0.20
-    cache_write: 2.50
 
 budget_warn_ratio: 0.8           # spec 9.5: warn at 80% of the monthly limit
