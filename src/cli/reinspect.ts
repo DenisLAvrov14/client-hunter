@@ -13,7 +13,7 @@ import { describeResult } from './format.js';
 // (unreachable, robots, 403, offsite redirects) are not re-inspected.
 const DEFAULT_REASONS = ['entity_unknown', 'entity_sole_trader', 'no_verified_observation', 'no_contact', 'no_mx'];
 
-const USAGE = `Usage: npm run reinspect -- [--market UK] [--limit 50] [--random] [--browser] [--dry-run]
+const USAGE = `Usage: npm run reinspect -- [--market UK] [--limit 50] [--random] [--refresh] [--browser] [--dry-run]
 
 Re-inspects companies rejected under the old rules (${DEFAULT_REASONS.join(', ')}) and the
 old candidates, with the new extraction (clean text, capabilities, all public emails,
@@ -22,6 +22,7 @@ outreach risk). Earlier pages and observations are kept; each company is re-insp
   --market    one market (default: all enabled)
   --limit     max companies (default: limits.max_companies_per_run)
   --random    random sample instead of alphabetical order
+  --refresh   re-inspect companies already inspected under the new rules (after an extraction fix)
   --browser   also run the Chromium mobile checks (slower; normally only for shortlisted companies)
   --dry-run   only count what would be re-inspected
 `;
@@ -31,6 +32,7 @@ const { values } = parseArgs({
     market: { type: 'string' },
     limit: { type: 'string' },
     random: { type: 'boolean' },
+    refresh: { type: 'boolean' },
     browser: { type: 'boolean' },
     'dry-run': { type: 'boolean' },
     help: { type: 'boolean', short: 'h' },
@@ -61,7 +63,7 @@ if (!Number.isInteger(limit) || limit < 1) {
 
 const db = openDb(path.resolve(config.app.db_file));
 migrate(db);
-const companies = companiesForReinspection(db, { markets, reasons: DEFAULT_REASONS, includeLegacyCandidates: true, limit, random: values.random ?? false });
+const companies = companiesForReinspection(db, { markets, reasons: DEFAULT_REASONS, includeLegacyCandidates: true, limit, random: values.random ?? false, refresh: values.refresh ?? false });
 process.stdout.write(`К переинспекции: ${companies.length} (${markets.join(', ')})${values['dry-run'] ? ' — dry run' : ''}\n\n`);
 if (values['dry-run'] || companies.length === 0) {
   db.close();

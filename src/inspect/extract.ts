@@ -10,9 +10,10 @@ const DROP_SELECTORS = [
   'nav', 'aside',
   '[role="navigation"]', '[role="banner"]', '[role="contentinfo"]', '[role="dialog"]', '[aria-hidden="true"]',
 ].join(', ');
-// Whole class/id tokens only, so a wrapper like id="shared-layout" survives.
-const DROP_CLASS_OR_ID =
-  /(^|[\s_-])(cookies?|consent|gdpr|newsletter|popup|modal|breadcrumbs?|skip-link|share|sharing|social)([\s_-]|$)/i;
+// A class/id token must START with the keyword: "cookie-banner" and "breadcrumbs" go, but
+// "no-breadcrumb" (a body class!) and "shared-layout" stay.
+const DROP_TOKEN = /^(cookies?|consent|gdpr|newsletter|popup|modal|breadcrumbs?|skip-link|share|sharing|social)([-_]|$)/i;
+const NEVER_DROP = new Set(['html', 'body', 'main', 'article']);
 
 const BLOCK_TAGS = 'p, h1, h2, h3, h4, h5, h6, li, dt, dd, td, th, blockquote, figcaption, address, div, section, article, br';
 
@@ -25,22 +26,25 @@ export function mainTextLines(html: string): string[] {
     .filter((_, el) => $(el).parents('main, article').length === 0)
     .remove();
   $('[class], [id]').each((_, el) => {
+    if (NEVER_DROP.has(el.tagName.toLowerCase())) return;
     const node = $(el);
-    if (DROP_CLASS_OR_ID.test(`${node.attr('class') ?? ''} ${node.attr('id') ?? ''}`)) node.remove();
+    const tokens = `${node.attr('class') ?? ''} ${node.attr('id') ?? ''}`.split(/\s+/);
+    if (tokens.some((t) => DROP_TOKEN.test(t))) node.remove();
   });
 
-  const candidates = [...$('main, [role="main"], article').toArray()];
+  const textLen = (el: Parameters<typeof $>[0]) => $(el).text().replace(/\s+/g, ' ').length;
+  const bodyLen = textLen('body');
   let root = $('body');
   let best = 0;
-  for (const el of candidates) {
-    const len = $(el).text().replace(/\s+/g, ' ').length;
+  for (const el of $('main, [role="main"], article').toArray()) {
+    const len = textLen(el);
     if (len > best) {
       best = len;
       root = $(el);
     }
   }
-  // A <main> holding only a fragment of the content is worse than the whole body.
-  if (best < 200) root = $('body');
+  // A <main>/<article> holding only a fragment of the page is worse than the whole body.
+  if (best < 200 || best < bodyLen * 0.3) root = $('body');
 
   root.find(BLOCK_TAGS).each((_, el) => {
     $(el).prepend('\n').append('\n');
@@ -52,22 +56,30 @@ export function mainTextLines(html: string): string[] {
     .filter((l) => l.length >= 3);
 }
 
+/** Repeated lines shorter than this are boilerplate (menu items, buttons); longer ones are content. */
+const SHARED_CONTENT_MIN_CHARS = 60;
+
 /**
- * Removes lines repeated on two or more pages of the same site (menus, footers, banners
- * that survived DROP_SELECTORS) and duplicate lines within a page.
+ * Removes duplicate lines within a page and lines repeated across pages of the same site:
+ * short ones (menus, footers, banners that survived DROP_SELECTORS) everywhere, long ones
+ * (a description shared by two product pages) everywhere except their first page.
  */
 export function dedupeAcrossPages(pagesLines: string[][]): string[][] {
   const seenOn = new Map<string, number>();
   for (const lines of pagesLines) {
     for (const line of new Set(lines)) seenOn.set(line, (seenOn.get(line) ?? 0) + 1);
   }
-  const shared = pagesLines.length >= 2;
+  const kept = new Set<string>();
   return pagesLines.map((lines) => {
     const out: string[] = [];
     const local = new Set<string>();
     for (const line of lines) {
-      if (local.has(line) || (shared && (seenOn.get(line) ?? 0) >= 2)) continue;
+      if (local.has(line)) continue;
       local.add(line);
+      if ((seenOn.get(line) ?? 0) >= 2) {
+        if (line.length < SHARED_CONTENT_MIN_CHARS || kept.has(line)) continue;
+        kept.add(line);
+      }
       out.push(line);
     }
     return out;

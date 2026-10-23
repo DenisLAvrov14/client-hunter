@@ -13,11 +13,18 @@ export interface MobileInspector {
   close(): Promise<void>;
 }
 
+/** Renders a page with JavaScript, for sites whose server HTML has almost no text. */
+export interface PageRenderer {
+  renderHtml(url: string): Promise<string | null>;
+  close(): Promise<void>;
+}
+
 const VIEWPORT = { width: 390, height: 844 };
 
 /** Playwright-based checks (spec 8.1 step 5): one browser, a fresh context per site, never submits anything. */
-export class PlaywrightInspector implements MobileInspector {
-  private browser: Browser | null = null;
+export class PlaywrightInspector implements MobileInspector, PageRenderer {
+  // The launch promise, not the browser, is cached so concurrent sites share one Chromium.
+  private browser: Promise<Browser> | null = null;
 
   constructor(
     private readonly userAgent: string,
@@ -25,8 +32,8 @@ export class PlaywrightInspector implements MobileInspector {
   ) {}
 
   private async context(): Promise<BrowserContext> {
-    this.browser ??= await chromium.launch({ headless: true });
-    return this.browser.newContext({
+    this.browser ??= chromium.launch({ headless: true });
+    return (await this.browser).newContext({
       viewport: VIEWPORT,
       isMobile: true,
       hasTouch: true,
@@ -155,8 +162,24 @@ export class PlaywrightInspector implements MobileInspector {
     return found;
   }
 
+  /** Page HTML after JavaScript has run; null on any browser failure. Never submits or clicks anything. */
+  async renderHtml(url: string): Promise<string | null> {
+    const ctx = await this.context();
+    try {
+      const page = await ctx.newPage();
+      await page.goto(url, { waitUntil: 'load', timeout: this.timeoutMs });
+      await page.waitForTimeout(2000);
+      return await page.content();
+    } catch {
+      return null;
+    } finally {
+      await ctx.close();
+    }
+  }
+
   async close(): Promise<void> {
-    await this.browser?.close();
+    const browser = this.browser;
     this.browser = null;
+    if (browser) await (await browser).close();
   }
 }

@@ -208,8 +208,25 @@ export function insertOutreachRisk(
 /** Companies whose earlier inspection ended in one of `reasons` (or a legacy candidate), for re-inspection. */
 export function companiesForReinspection(
   db: Db,
-  opts: { markets: MarketCode[]; reasons: string[]; includeLegacyCandidates: boolean; limit: number; random?: boolean },
+  opts: {
+    markets: MarketCode[];
+    reasons: string[];
+    includeLegacyCandidates: boolean;
+    limit: number;
+    random?: boolean;
+    /** Re-inspect companies already inspected under the new rules (e.g. after an extraction fix). */
+    refresh?: boolean;
+  },
 ): CompanyRow[] {
+  if (opts.refresh) {
+    return db
+      .prepare(
+        `SELECT * FROM companies WHERE market IN (${opts.markets.map(() => '?').join(', ')})
+           AND status = 'inspected' AND last_inspection_id IS NOT NULL
+         ORDER BY ${opts.random ? 'random()' : 'market, domain'} LIMIT ?`,
+      )
+      .all(...opts.markets, opts.limit) as CompanyRow[];
+  }
   const reasonClauses = opts.reasons.map(() => `(status = 'rejected_auto' AND (reject_reason = ? OR reject_reason LIKE ? || ':%'))`);
   if (opts.includeLegacyCandidates) reasonClauses.push(`status = 'contact_found'`);
   if (reasonClauses.length === 0) return [];

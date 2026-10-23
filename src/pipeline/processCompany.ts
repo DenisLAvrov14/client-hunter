@@ -21,7 +21,7 @@ import { runHtmlChecks } from '../inspect/checks.js';
 import { extractMainTexts, internalLinks } from '../inspect/extract.js';
 import { FetchError, type Fetcher, type FetchResult } from '../inspect/fetcher.js';
 import { checkBrokenNavLinks, confirmBrokenImages } from '../inspect/links.js';
-import type { MobileInspector, MobileTarget } from '../inspect/mobile.js';
+import type { MobileInspector, MobileTarget, PageRenderer } from '../inspect/mobile.js';
 import { buildPageContext, hasInquiryForm } from '../inspect/page.js';
 import { pickPages } from '../inspect/pagePicker.js';
 import { detectPlatform, isShopifyPasswordPage, looksParked } from '../inspect/platform.js';
@@ -35,6 +35,8 @@ export interface ProcessDeps {
   db: Db;
   fetcher: Fetcher;
   mobile: MobileInspector | null;
+  /** Renders the home page with JavaScript when the server HTML has almost no text. */
+  renderer: PageRenderer | null;
   mxCheck: MxChecker;
   market: MarketConfig;
   segment: SegmentCode;
@@ -58,6 +60,9 @@ export interface ProcessResult {
   /** Outreach risk of the best contact; informational, never part of qualification. */
   risk: OutreachRisk | null;
 }
+
+/** Below this many characters of main text on all pages, the home page is rendered with JavaScript. */
+const THIN_TEXT_CHARS = 300;
 
 class Reject extends Error {
   constructor(readonly reason: string) {
@@ -176,8 +181,19 @@ export async function processCompany(company: CompanyRow, deps: ProcessDeps): Pr
         // One failing subpage does not fail the company.
       }
     }
-    const mainTexts = extractMainTexts(pages, deps.mainTextMaxChars);
-    pages.forEach((page, i) =>
+    // Text for understanding the business. JavaScript-only sites send almost no text in their
+    // HTML; then the home page is rendered once in Chromium. Technical checks below keep using
+    // the server HTML (`pages`), which is what they are about.
+    let textPages = pages;
+    let mainTexts = extractMainTexts(textPages, deps.mainTextMaxChars);
+    if (deps.renderer && mainTexts.join('').length < THIN_TEXT_CHARS) {
+      const rendered = await deps.renderer.renderHtml(home.url);
+      if (rendered) {
+        textPages = [buildPageContext(home.url, 'home', home.status, rendered), ...pages.slice(1)];
+        mainTexts = extractMainTexts(textPages, deps.mainTextMaxChars);
+      }
+    }
+    textPages.forEach((page, i) =>
       insertPage(db, company.id, inspectionId, page, {
         mainText: mainTexts[i] ?? '',
         links: internalLinks(page, deps.linksMax),
@@ -187,7 +203,7 @@ export async function processCompany(company: CompanyRow, deps: ProcessDeps): Pr
 
     // 3. Legal entity (spec 8.6): recorded for outreach risk only, never a filter.
     // No registry lookup without a Companies House key.
-    const entity = detectEntity(pages, market);
+    const entity = detectEntity(textPages, market);
     result.entity = entity.entityType;
     updateCompany(db, company.id, {
       entity_type: entity.entityType,
@@ -224,12 +240,12 @@ export async function processCompany(company: CompanyRow, deps: ProcessDeps): Pr
     for (const o of observations) insertObservation(db, company.id, inspectionId, o);
     result.verified = observations.filter((o) => o.status === 'verified').map((o) => o.code);
     result.likely = observations.filter((o) => o.status === 'likely').map((o) => o.code);
-    capabilities = detectCapabilities(pages, platform, productCount);
+    capabilities = detectCapabilities(textPages, platform, productCount);
 
     // 5. Contacts (spec 8.5) and outreach risk per contact. No contact is a note, not a rejection.
     const mxCache = new Map<string, boolean>();
     const order: Record<OutreachRisk, number> = { low: 0, review_required: 1, high: 2 };
-    for (const c of extractContacts(pages, company.domain)) {
+    for (const c of extractContacts(textPages, company.domain)) {
       const host = c.email.split('@')[1]!;
       if (!mxCache.has(host)) mxCache.set(host, await deps.mxCheck(host));
       const mxOk = mxCache.get(host)!;

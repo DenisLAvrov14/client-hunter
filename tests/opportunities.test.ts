@@ -27,6 +27,17 @@ describe('mainTextLines', () => {
     expect(mainTextLines(html)).toEqual(['Industrial valves', 'Stockist since 1985.']);
   });
 
+  it('never drops <body> because of a class like "no-breadcrumb" (real site)', () => {
+    const html = '<body class="page-index no-breadcrumb no-sidebar"><div class="page"><p>Plumbing and heating supplies</p></div></body>';
+    expect(mainTextLines(html)).toEqual(['Plumbing and heating supplies']);
+  });
+
+  it('uses the whole page when <main> holds only a small part of the text', () => {
+    const long = 'Trade counter open to the public, next-day delivery across the region. '.repeat(10);
+    const html = `<body><main><p>${'Welcome to our store. '.repeat(10)}</p></main><div><p>${long}</p></div></body>`;
+    expect(mainTextLines(html).join(' ')).toContain('Trade counter open to the public');
+  });
+
   it('does not drop a wrapper whose id merely contains "share"', () => {
     const html = '<body><div id="shared-layout"><p>Wedding photography in Galway</p></div></body>';
     expect(mainTextLines(html)).toEqual(['Wedding photography in Galway']);
@@ -40,6 +51,14 @@ describe('dedupeAcrossPages / capText', () => {
       ['Call us 0161 000', 'Fasteners and fixings'],
     ]);
     expect(out).toEqual([['Steel sections'], ['Fasteners and fixings']]);
+  });
+
+  it('keeps a long description shared by two pages once, on the first page', () => {
+    const desc = 'Особенность вагонки штиль – мягкие скругленные фаски по бокам каждой доски.';
+    expect(dedupeAcrossPages([['Каталог', desc, 'Сосна'], ['Каталог', desc, 'Лиственница']])).toEqual([
+      [desc, 'Сосна'],
+      ['Лиственница'],
+    ]);
   });
 
   it('keeps a single page intact', () => {

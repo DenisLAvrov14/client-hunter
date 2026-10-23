@@ -92,6 +92,11 @@ describe('extractContacts', () => {
     expect(contacts.some((c) => /^(accounts|jobs)@/.test(c.email))).toBe(false);
   });
 
+  it('does not glue a phone number in an adjacent element onto an address', () => {
+    const p = [page('<p><span>Tel 0161 456026</span><span>enquiries@acme.co.uk</span></p>')];
+    expect(extractContacts(p, 'acme.co.uk').map((c) => c.email)).toEqual(['enquiries@acme.co.uk']);
+  });
+
   it('de-obfuscates "name [at] domain"', () => {
     const c = extractContacts([page('<p>quotes [at] acme.co.uk</p>')], 'acme.co.uk');
     expect(c).toMatchObject([{ email: 'quotes@acme.co.uk', roleHint: 'enquiries', isFreemail: false }]);

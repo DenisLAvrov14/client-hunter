@@ -47,6 +47,7 @@ function setup(site: ConstructorParameters<typeof FakeFetcher>[0], suppressed = 
     db,
     fetcher,
     mobile: null,
+    renderer: null,
     mxCheck: async () => true,
     market: config.markets.get('UK')!,
     segment: 'S2',
@@ -170,6 +171,41 @@ describe('processCompany', () => {
       [`${ORIGIN}/`]: [200, html, '<p>Jo Bloggs Photography is a sole trader. <a href="mailto:jo@northbridge-example.co.uk">Email</a></p>'],
     });
     expect(await processCompany(company, deps)).toMatchObject({ status: 'inspected', entity: 'sole_trader', risk: 'high' });
+  });
+
+  it('renders a JavaScript-only home page in a browser, but runs technical checks on the server HTML', async () => {
+    const { db, company, deps } = setup({
+      [`${ORIGIN}/robots.txt`]: [404, html, ''],
+      [`${ORIGIN}/`]: [200, html, '<html><body><div id="root"></div><script src="/app.js"></script></body></html>'],
+    });
+    const rendered: string[] = [];
+    const renderer = {
+      renderHtml: async (url: string) => {
+        rendered.push(url);
+        return '<html><body><h1>Tattoo studio in Amsterdam</h1><p>Walk-ins welcome. Mail us at info@northbridge-example.co.uk</p></body></html>';
+      },
+      close: async () => {},
+    };
+    const r = await processCompany(company, { ...deps, renderer });
+    expect(rendered).toEqual([`${ORIGIN}/`]);
+    expect(r).toMatchObject({ status: 'inspected', contact: 'info@northbridge-example.co.uk' });
+    // NO_VIEWPORT_META is about what the server sends, so it is still reported.
+    expect(r.verified).toContain('NO_VIEWPORT_META');
+    const page = db.prepare('SELECT main_text FROM pages WHERE inspection_id = (SELECT last_inspection_id FROM companies WHERE id = ?)').get(company.id) as { main_text: string };
+    expect(page.main_text).toContain('Tattoo studio in Amsterdam');
+  });
+
+  it('does not render sites that already have text', async () => {
+    const text = [1, 2, 3, 4, 5]
+      .map((n) => `<p>Branch ${n}: steel sections, fasteners, fixings and fabrication consumables for trade customers.</p>`)
+      .join('');
+    const { company, deps } = setup({
+      [`${ORIGIN}/robots.txt`]: [404, html, ''],
+      [`${ORIGIN}/`]: [200, html, `<html><body>${text}</body></html>`],
+    });
+    let calls = 0;
+    await processCompany(company, { ...deps, renderer: { renderHtml: async () => (calls++, null), close: async () => {} } });
+    expect(calls).toBe(0);
   });
 
   it('re-inspection adds a new inspection and keeps the earlier pages and observations', async () => {

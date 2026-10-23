@@ -19,7 +19,9 @@ import type { PageKind } from '../src/inspect/types.js';
 import { Budget, BudgetExceededError, costUsd } from '../src/llm/budget.js';
 import { LlmError, type LlmClient, type LlmRequest, type LlmResponse } from '../src/llm/client.js';
 import type { ScreenResult } from '../src/llm/schemas.js';
+import { stratifiedSample } from '../src/llm/sample.js';
 import { screenCompany } from '../src/llm/screen.js';
+import { buildScreeningReport } from '../src/reports/screening.js';
 import { finalizeScreen, normalizeForMatch, validateScreen } from '../src/llm/validate.js';
 
 const baseConfig = loadConfig();
@@ -256,5 +258,53 @@ describe('screenCompany', () => {
       screenCompany(companyId, { db, config: baseConfig, llm, budget: new Budget(db, withLimits({ max_llm_cost_usd_per_run: 0 })) }),
     ).rejects.toThrow(BudgetExceededError);
     expect(llm.requests).toHaveLength(0);
+  });
+});
+
+describe('stratifiedSample', () => {
+  it('takes companies round-robin across groups and skips already screened ones', () => {
+    const db = freshDb();
+    const add = (domain: string, segment: string, entity: string, defect: boolean) => {
+      const { id } = upsertDiscovered(
+        db,
+        { name: domain, websiteUrl: `https://${domain}/`, city: null, sourceRef: null, query: null },
+        { market: 'UK', segment: segment as 'S2', sourceId: 'csv', termsNote: 't' },
+      )!;
+      const ins = startInspection(db, id, 'reinspect');
+      if (defect) insertObservation(db, id, ins, { code: 'SSL_ERROR', status: 'verified', description: 'x' });
+      updateCompany(db, id, { status: 'inspected', last_inspection_id: ins, entity_type: entity });
+      return id;
+    };
+    add('s3a.co.uk', 'S3', 'unknown', false);
+    add('s3b.co.uk', 'S3', 'unknown', false);
+    add('sole.co.uk', 'S2', 'sole_trader', false);
+    add('defect.co.uk', 'S2', 'ltd', true);
+    add('unk.co.uk', 'S2', 'unknown', false);
+    const screened = add('ltd.co.uk', 'S2', 'ltd', false);
+    add('ltd2.co.uk', 'S2', 'ltd', false);
+    db.prepare(
+      `INSERT INTO assessments (id, company_id, stage, model, prompt_version, input_hash, payload_json, validation_json, created_at)
+       VALUES ('asm_1', ?, 'screen', 'm', 'p', 'h', '{}', '{}', '')`,
+    ).run(screened);
+
+    const sample = stratifiedSample(db, 5, ['UK']);
+    expect(sample.map((s) => s.group)).toEqual(['local_services', 'sole_trader', 'tech_defect', 'no_defect_unknown_entity', 'no_defect_company']);
+    expect(sample.find((s) => s.group === 'no_defect_company')!.domain).toBe('ltd2.co.uk');
+    expect(stratifiedSample(db, 50, ['UK'])).toHaveLength(6);
+  });
+});
+
+describe('screening report', () => {
+  it('shows decisions per group and marks verified hooks', async () => {
+    const db = freshDb();
+    const { companyId, obsId } = setupCompany(db);
+    const bad = goodAnswer(obsId);
+    bad.opportunities[0]!.hook = 'not on the site';
+    const llm = new FakeLlm([bad, bad]);
+    await screenCompany(companyId, { db, config: baseConfig, llm, budget: new Budget(db, baseConfig) });
+    const md = buildScreeningReport(db, [{ id: companyId, group: 'local_services' }], { runCost: 0.002, runCalls: 2 });
+    expect(md).toContain('| deep | 1 | 1 |');
+    expect(md).toContain('✗ «not on the site»');
+    expect(md).toContain(`✓ находка ${obsId}`);
   });
 });

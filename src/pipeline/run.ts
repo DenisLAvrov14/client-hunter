@@ -92,6 +92,8 @@ export async function inspectCompanies(
     throttle: new DomainThrottle(config.limits.per_domain_delay_ms),
   });
   const mobile = opts.browser ? new PlaywrightInspector(config.app.user_agent, config.limits.request_timeout_ms * 2) : null;
+  // Chromium starts lazily, only if a JavaScript-only site needs rendering.
+  const renderer = mobile ?? new PlaywrightInspector(config.app.user_agent, config.limits.request_timeout_ms * 2);
   const limit = pLimit(config.limits.max_concurrent_sites);
   const results: RunOutcome['results'] = [];
   const errors: string[] = [];
@@ -104,6 +106,7 @@ export async function inspectCompanies(
             db,
             fetcher,
             mobile,
+            renderer,
             mxCheck: dnsMxChecker,
             market: config.markets.get(company.market)!,
             segment: company.segment ?? 'S2',
@@ -122,7 +125,7 @@ export async function inspectCompanies(
       ),
     );
   } finally {
-    await mobile?.close();
+    await renderer.close();
   }
   return { results, errors };
 }

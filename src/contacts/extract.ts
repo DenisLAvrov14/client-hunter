@@ -46,6 +46,22 @@ function normalize(raw: string): string {
     .replace(/\.$/, '');
 }
 
+/**
+ * Visible text with a space between text nodes. page.text joins adjacent elements directly,
+ * so "<span>0161 456026</span><a>enquiries@x.co.uk</a>" would read as "456026enquiries@…".
+ */
+function spacedText(page: PageContext): string {
+  const parts: string[] = [];
+  page.$('body')
+    .find('*')
+    .not('script, style, noscript, template')
+    .contents()
+    .each((_, node) => {
+      if (node.type === 'text') parts.push(node.data);
+    });
+  return parts.join(' ');
+}
+
 function roleOf(local: string): RoleHint {
   for (const [hint, re] of ROLE_LOCALS) if (re.test(local)) return hint;
   return 'named';
@@ -60,7 +76,7 @@ function roleOf(local: string): RoleHint {
 export function extractContacts(pages: PageContext[], companyDomain: string): ContactCandidate[] {
   const found = new Map<string, ContactCandidate>();
   for (const page of pages) {
-    const raw = [...mailtoAddresses(page), ...(page.text.match(EMAIL_IN_TEXT) ?? [])];
+    const raw = [...mailtoAddresses(page), ...(spacedText(page).match(EMAIL_IN_TEXT) ?? [])];
     for (const r of raw) {
       const email = normalize(r);
       if (!/^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/.test(email) || found.has(email)) continue;
