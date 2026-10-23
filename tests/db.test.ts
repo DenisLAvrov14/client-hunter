@@ -1,3 +1,6 @@
+import { copyFileSync, mkdtempSync, readdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { openDb } from '../src/db/connection.js';
 import { migrate } from '../src/db/migrate.js';
@@ -6,7 +9,7 @@ import { companiesForReinspection } from '../src/db/repo.js';
 describe('migrate', () => {
   it('creates all spec tables and is idempotent', () => {
     const db = openDb(':memory:');
-    expect(migrate(db)).toEqual(['001_init.sql', '002_opportunities.sql', '003_assessments.sql']);
+    expect(migrate(db)).toEqual(['001_init.sql', '002_opportunities.sql', '003_assessments.sql', '004_contact_status.sql']);
     expect(migrate(db)).toEqual([]);
 
     const tables = db
@@ -81,6 +84,36 @@ describe('companiesForReinspection', () => {
 
     db.prepare("UPDATE companies SET last_inspection_id = 'ins_1' WHERE id = 'cmp_a'").run();
     expect(pick()).toEqual(['cmp_c', 'cmp_d']);
+    db.close();
+  });
+});
+
+describe('migration 004 (contact_status)', () => {
+  it('applies on top of existing data without changing it, and only once', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'ch-migrations-'));
+    const all = readdirSync('migrations').filter((f) => f.endsWith('.sql')).sort();
+    for (const f of all.filter((f) => f < '004')) copyFileSync(path.join('migrations', f), path.join(dir, f));
+
+    const db = openDb(':memory:');
+    expect(migrate(db, dir)).toEqual(['001_init.sql', '002_opportunities.sql', '003_assessments.sql']);
+    db.prepare(`INSERT INTO companies (id, domain, market, status, created_at, updated_at) VALUES ('cmp_1', 'a.co.uk', 'UK', 'inspected', '', '')`).run();
+    db.prepare(`INSERT INTO inspections (id, company_id, mode, started_at, result_status) VALUES ('ins_1', 'cmp_1', 'reinspect', 't', 'inspected')`).run();
+    db.prepare(
+      `INSERT INTO outreach_risk (id, company_id, inspection_id, contact_id, jurisdiction, recipient_type, risk, reason, confidence,
+         unknowns_json, to_verify_json, rules_version, created_at)
+       VALUES ('ork_1', 'cmp_1', 'ins_1', NULL, 'UK', 'unknown', 'review_required', 'old', 'high', '[]', '[]', '2026-10-23.1', 't')`,
+    ).run();
+
+    copyFileSync(path.join('migrations', '004_contact_status.sql'), path.join(dir, '004_contact_status.sql'));
+    expect(migrate(db, dir)).toEqual(['004_contact_status.sql']);
+    expect(migrate(db, dir)).toEqual([]);
+
+    expect(db.prepare('SELECT id, result_status, contact_status FROM inspections').all()).toEqual([
+      { id: 'ins_1', result_status: 'inspected', contact_status: null },
+    ]);
+    expect(db.prepare('SELECT id, risk, rules_version FROM outreach_risk').all()).toEqual([
+      { id: 'ork_1', risk: 'review_required', rules_version: '2026-10-23.1' },
+    ]);
     db.close();
   });
 });

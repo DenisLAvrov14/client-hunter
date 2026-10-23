@@ -17,6 +17,7 @@ interface CompanyReportRow {
   registry_id: string | null;
   last_inspection_id: string | null;
   capabilities_json: string | null;
+  contact_status: string | null;
 }
 
 interface ObservationRow {
@@ -38,7 +39,10 @@ interface RiskRow {
 
 export interface CompanyReport extends CompanyReportRow {
   observations: ObservationRow[];
-  risks: RiskRow[];
+  /** Risk for the recipient as such (market + recipient type); null for inspections before rules 2026-10-23.2. */
+  recipientRisk: RiskRow | null;
+  /** Per-address refinements, lowest risk first. */
+  emailRisks: RiskRow[];
   capabilities: string[];
 }
 
@@ -49,6 +53,8 @@ export interface CandidatesReport {
 }
 
 const RISK_ORDER = "CASE r.risk WHEN 'low' THEN 0 WHEN 'review_required' THEN 1 ELSE 2 END";
+// Under rules 2026-10-23.1 a row without contact meant "no email found", not the recipient's risk.
+const LEGACY_NO_EMAIL_RULES = '2026-10-23.1';
 
 /**
  * Every usable inspected company of a market with the evidence of its latest inspection.
@@ -58,7 +64,7 @@ export function buildCandidatesReport(db: Db, market: MarketCode): CandidatesRep
   const rows = db
     .prepare(
       `SELECT c.id, c.name, c.domain, c.website_url, c.city, c.segment, c.platform, c.entity_type, c.entity_evidence,
-              c.registry_id, c.last_inspection_id, i.capabilities_json
+              c.registry_id, c.last_inspection_id, i.capabilities_json, i.contact_status
        FROM companies c LEFT JOIN inspections i ON i.id = c.last_inspection_id
        WHERE c.market = ? AND c.status IN ('inspected', 'contact_found')
        ORDER BY c.segment, c.domain`,
@@ -76,10 +82,18 @@ export function buildCandidatesReport(db: Db, market: MarketCode): CandidatesRep
            ORDER BY CASE status WHEN 'verified' THEN 0 WHEN 'likely' THEN 1 ELSE 2 END, code`,
         )
         .all(c.id, c.last_inspection_id) as ObservationRow[],
-      risks: db
+      recipientRisk:
+        (db
+          .prepare(
+            `SELECT NULL AS email, NULL AS is_freemail, r.risk, r.reason, r.recipient_type FROM outreach_risk r
+             WHERE r.company_id = ? AND r.inspection_id IS ? AND r.contact_id IS NULL AND r.rules_version != ?
+             ORDER BY r.created_at DESC LIMIT 1`,
+          )
+          .get(c.id, c.last_inspection_id, LEGACY_NO_EMAIL_RULES) as RiskRow | undefined) ?? null,
+      emailRisks: db
         .prepare(
           `SELECT k.email, k.is_freemail, r.risk, r.reason, r.recipient_type FROM outreach_risk r
-           LEFT JOIN contacts k ON k.id = r.contact_id
+           JOIN contacts k ON k.id = r.contact_id
            WHERE r.company_id = ? AND r.inspection_id IS ? ORDER BY ${RISK_ORDER}`,
         )
         .all(c.id, c.last_inspection_id) as RiskRow[],
@@ -110,8 +124,8 @@ function csvCell(v: string | null | undefined): string {
 
 export function toCsv(report: CandidatesReport): string {
   const header = [
-    'domain', 'name', 'city', 'segment', 'platform', 'entity', 'best_contact', 'outreach_risk',
-    'verified', 'likely', 'capabilities', 'website',
+    'domain', 'name', 'city', 'segment', 'platform', 'entity', 'outreach_risk', 'contact_status',
+    'best_email', 'best_email_risk', 'verified', 'likely', 'capabilities', 'website',
   ];
   const rows = report.companies.map((c) =>
     [
@@ -121,8 +135,10 @@ export function toCsv(report: CandidatesReport): string {
       c.segment,
       c.platform,
       c.entity_type,
-      c.risks[0]?.email ?? '',
-      c.risks[0]?.risk ?? '',
+      c.recipientRisk?.risk ?? '',
+      c.contact_status ?? '',
+      c.emailRisks[0]?.email ?? '',
+      c.emailRisks[0]?.risk ?? '',
       c.observations.filter((o) => o.status === 'verified').map((o) => o.code).join(' '),
       c.observations.filter((o) => o.status === 'likely').map((o) => o.code).join(' '),
       c.capabilities.join(' '),
@@ -144,7 +160,7 @@ export function toMarkdown(report: CandidatesReport, market: MarketCode, generat
     `Сформировано: ${generatedAt.toISOString().slice(0, 16).replace('T', ' ')} UTC · компаний: **${report.companies.length}**` +
       ` · с проверенными техническими находками: **${withFindings}**`,
     '',
-    'Риск контакта — отдельная информация о законности холодного письма; на отбор компаний он не влияет.',
+    'Риск обращения (законность холодного письма) и доступность контакта — отдельная информация; на отбор компаний они не влияют.',
     '',
     '## Воронка',
     '',
@@ -167,11 +183,14 @@ export function toMarkdown(report: CandidatesReport, market: MarketCode, generat
     );
     if (c.entity_evidence) lines.push(`Признак юрлица: ${c.entity_evidence}`);
     lines.push(`Уже есть на сайте: ${c.capabilities.join(', ') || '—'}`);
-    if (c.risks.length === 0) {
-      lines.push('Контакт: — (компания проверена до миграции 002)');
-    }
-    for (const r of c.risks) {
-      lines.push(`Контакт: ${r.email ?? '—'}${r.is_freemail ? ' (публичная почта)' : ''} · риск: ${RISK_LABEL[r.risk] ?? r.risk} — ${r.reason}`);
+    lines.push(
+      c.recipientRisk
+        ? `Риск обращения: ${RISK_LABEL[c.recipientRisk.risk] ?? c.recipientRisk.risk} — ${c.recipientRisk.reason}`
+        : 'Риск обращения: не определён (проверка по старым правилам)',
+    );
+    lines.push(`Доступность контакта: ${c.contact_status ?? 'не определена (проверка до миграции 004)'}`);
+    for (const r of c.emailRisks) {
+      lines.push(`Email: ${r.email}${r.is_freemail ? ' (публичная почта)' : ''} · риск адреса: ${RISK_LABEL[r.risk] ?? r.risk} — ${r.reason}`);
     }
     lines.push('');
     for (const o of c.observations) {

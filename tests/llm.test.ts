@@ -56,7 +56,12 @@ function setupCompany(db: Db, opts: { homeText?: string } = {}) {
   });
   upsertContact(db, id, { email: 'info@oakstairs.co.uk', kind: 'role', roleHint: 'info', isFreemail: false, foundOnUrl: HOME }, true);
   upsertContact(db, id, { email: 'dave.oak@gmail.com', kind: 'named', roleHint: 'named', isFreemail: true, foundOnUrl: HOME }, true);
-  finishInspection(db, ins, { status: 'inspected', reason: null, capabilities: detectCapabilities(ctxs, 'wordpress', null) });
+  finishInspection(db, ins, {
+    status: 'inspected',
+    reason: null,
+    capabilities: detectCapabilities(ctxs, 'wordpress', null),
+    contactStatus: 'email',
+  });
   updateCompany(db, id, { status: 'inspected', last_inspection_id: ins, platform: 'wordpress' });
   return { companyId: id, obsId };
 }

@@ -6,8 +6,10 @@ import type { MarketConfig } from '../config/schema.js';
 import type { ContactCandidate } from '../contacts/extract.js';
 import type { EntityType } from '../entity/detect.js';
 
-export const RISK_RULES_VERSION = '2026-10-23.1';
+// .2: risk no longer depends on whether an email exists (contact availability is contact_status).
+export const RISK_RULES_VERSION = '2026-10-23.2';
 
+/** Preliminary assessment only: 'low' is a low preliminary risk, never a legal permission to send. */
 export type OutreachRisk = 'low' | 'review_required' | 'high';
 export type RecipientType =
   | 'company_confirmed' // legal form confirmed in a registry (not implemented yet: no registry keys)
@@ -33,7 +35,12 @@ export function recipientTypeOf(entity: EntityType): RecipientType {
   return 'unknown';
 }
 
-/** Classifies one contact (or the absence of one) for one company in one market. */
+/**
+ * Classifies cold outreach for one company in one market. With `contact` null it is the risk
+ * for the recipient as such (market rules + recipient type) — NOT "no email found"; contact
+ * availability is a separate field (contactStatus.ts). With a contact it refines it for that
+ * address (public mailbox, named address).
+ */
 export function assessOutreachRisk(
   market: MarketConfig,
   entity: EntityType,
@@ -66,16 +73,6 @@ export function assessOutreachRisk(
 
   // allowed_for_companies: companies may be emailed without prior consent; individuals and
   // sole traders may not (UK PECR, IE S.I. 336/2011, NL Telecommunicatiewet 11.7).
-  if (!contact) {
-    return {
-      ...base,
-      risk: 'review_required',
-      reason: 'Рабочий публичный email не найден (на сайте нет адреса или у его домена нет MX-записи).',
-      confidence: 'high',
-      unknowns: ['доступный бизнес-контакт'],
-      toVerify: ['найти публичный ролевой адрес компании'],
-    };
-  }
   if (recipientType === 'sole_trader_confirmed') {
     return {
       ...base,
@@ -90,23 +87,35 @@ export function assessOutreachRisk(
     return {
       ...base,
       risk: 'review_required',
-      reason: contact.isFreemail
-        ? 'Юридическая форма неизвестна, адрес на публичной почте — получатель может быть физлицом.'
-        : 'Юридическая форма неизвестна: если это ИП или физлицо, нужно согласие.',
+      reason: contact?.isFreemail
+        ? 'Юридическая форма неизвестна; адрес на публичной почте (Gmail и т. п.) часто бывает рабочим у предпринимателей, но если получатель — ИП или физлицо, нужно согласие.'
+        : 'Юридическая форма получателя неизвестна: если это ИП или физлицо, холодное письмо требует согласия.',
       confidence: 'low',
       unknowns: ['юридическая форма получателя'],
       toVerify: ['проверить юридическую форму в реестре или на сайте'],
     };
   }
   // company_likely
+  if (!contact) {
+    return {
+      ...base,
+      risk: 'low',
+      reason:
+        'Предварительно низкий риск: компания (по тексту сайта), а по общему правилу рынка деловое письмо компании на ролевой адрес возможно без предварительного согласия. Это не юридическое разрешение — проверить перед обращением.',
+      confidence: 'medium',
+      unknowns: [registryNote],
+      toVerify: ['проверить юрлицо в реестре', 'законный интерес (LIA) для рынка заполнен'],
+    };
+  }
   if (contact.isFreemail) {
     return {
       ...base,
       risk: 'review_required',
-      reason: 'Компания, но адрес на публичной почте — похоже на личный ящик сотрудника или владельца.',
+      reason:
+        'Компания, но адрес на публичной почте (Gmail и т. п.): это может быть рабочий ящик, но формально он принадлежит физлицу у почтового сервиса.',
       confidence: 'low',
-      unknowns: ['чей это ящик'],
-      toVerify: [registryNote, 'найти ролевой адрес на домене компании'],
+      unknowns: ['чей это ящик: общий рабочий или личный'],
+      toVerify: [registryNote, 'найти ролевой адрес на домене компании, если он есть'],
     };
   }
   if (contact.kind === 'named' && !market.allow_named_business_address) {

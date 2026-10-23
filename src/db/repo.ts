@@ -4,6 +4,7 @@ import type { ContactCandidate } from '../contacts/extract.js';
 import type { Capabilities } from '../inspect/capabilities.js';
 import type { PageLink } from '../inspect/extract.js';
 import type { ObservationDraft, PageContext } from '../inspect/types.js';
+import type { ContactStatus } from '../outreach/contactStatus.js';
 import type { RiskAssessment } from '../outreach/risk.js';
 import type { CandidateCompany } from '../sources/types.js';
 import { registrableDomain } from '../util/domain.js';
@@ -102,11 +103,24 @@ export function startInspection(db: Db, companyId: string, mode: 'discover' | 'r
 export function finishInspection(
   db: Db,
   id: string,
-  result: { status: CompanyStatus; reason: string | null; capabilities: Capabilities | null },
+  result: {
+    status: CompanyStatus;
+    reason: string | null;
+    capabilities: Capabilities | null;
+    contactStatus: ContactStatus | null;
+  },
 ): void {
   db.prepare(
-    'UPDATE inspections SET finished_at = ?, result_status = ?, result_reason = ?, capabilities_json = ? WHERE id = ?',
-  ).run(now(), result.status, result.reason, result.capabilities ? JSON.stringify(result.capabilities) : null, id);
+    `UPDATE inspections SET finished_at = ?, result_status = ?, result_reason = ?, capabilities_json = ?, contact_status = ?
+     WHERE id = ?`,
+  ).run(
+    now(),
+    result.status,
+    result.reason,
+    result.capabilities ? JSON.stringify(result.capabilities) : null,
+    result.contactStatus,
+    id,
+  );
 }
 
 export function insertPage(

@@ -80,12 +80,18 @@ export function buildScreeningReport(db: Db, refs: ScreenedRef[], meta: { runCos
     const p = JSON.parse(r.payload_json) as ScreenResult;
     const v = JSON.parse(r.validation_json) as { opportunities: OpportunityCheck[]; issues: string[] };
     const g = groups.get(r.id);
+    // Recipient-level risk only (contact_id NULL, rules from 2026-10-23.2); availability is separate.
     const risk = db
       .prepare(
-        `SELECT risk, reason FROM outreach_risk WHERE company_id = ? AND inspection_id = (SELECT last_inspection_id FROM companies WHERE id = ?)
-         ORDER BY CASE risk WHEN 'low' THEN 0 WHEN 'review_required' THEN 1 ELSE 2 END LIMIT 1`,
+        `SELECT risk, reason FROM outreach_risk WHERE company_id = ? AND contact_id IS NULL AND rules_version != '2026-10-23.1'
+           AND inspection_id = (SELECT last_inspection_id FROM companies WHERE id = ?) LIMIT 1`,
       )
       .get(r.id, r.id) as { risk: string; reason: string } | undefined;
+    const contactStatus = (
+      db.prepare('SELECT i.contact_status FROM inspections i JOIN companies c ON c.last_inspection_id = i.id WHERE c.id = ?').get(r.id) as
+        | { contact_status: string | null }
+        | undefined
+    )?.contact_status;
 
     lines.push(`### ${r.decision.toUpperCase()} · ${r.name ?? r.domain} — ${r.domain} (${r.market})`, '');
     lines.push(
@@ -115,7 +121,8 @@ export function buildScreeningReport(db: Db, refs: ScreenedRef[], meta: { runCos
     lines.push('', `**Решение:** ${r.decision} — ${p.decision_reason}`);
     if (p.unknowns.length) lines.push(`**Неизвестно:** ${p.unknowns.join('; ')}`);
     if (v.issues.length) lines.push(`**Замечания проверки:** ${v.issues.join('; ')}`);
-    if (risk) lines.push(`**Риск контакта:** ${RISK_LABEL[risk.risk] ?? risk.risk} — ${risk.reason}`);
+    lines.push(`**Риск обращения:** ${risk ? `${RISK_LABEL[risk.risk] ?? risk.risk} — ${risk.reason}` : 'не определён (проверка по старым правилам)'}`);
+    lines.push(`**Доступность контакта:** ${contactStatus ?? 'не определена'}`);
     lines.push(
       `<sub>токены: ${r.input_tokens ?? '?'} вход / ${r.output_tokens ?? '?'} выход · $${(r.cost_usd ?? 0).toFixed(4)}</sub>`,
       '',

@@ -29,6 +29,7 @@ import { detectPlatform, isShopifyPasswordPage, looksParked } from '../inspect/p
 import { robotsFromResponse, type RobotsPolicy } from '../inspect/robots.js';
 import { countShopifyProducts } from '../inspect/shopify.js';
 import type { ObservationDraft, PageContext } from '../inspect/types.js';
+import { contactStatusOf, type ContactStatus } from '../outreach/contactStatus.js';
 import { assessOutreachRisk, RISK_RULES_VERSION, type OutreachRisk } from '../outreach/risk.js';
 import { registrableDomain } from '../util/domain.js';
 
@@ -57,9 +58,14 @@ export interface ProcessResult {
   entity: string | null;
   verified: string[];
   likely: string[];
+  /** Best public email (lowest risk first), if any. */
   contact: string | null;
-  /** Outreach risk of the best contact; informational, never part of qualification. */
+  /** Outreach risk for the recipient (market + recipient type), independent of contacts. Never part of qualification. */
   risk: OutreachRisk | null;
+  /** Outreach risk of `contact` specifically (e.g. a public mailbox can be riskier than the company). */
+  contactRisk: OutreachRisk | null;
+  /** How the business can be reached; null if the inspection did not get that far. */
+  contactStatus: ContactStatus | null;
   /** Mobile checks in Chromium: 'incomplete' means some pages were NOT checked (not "no problems"). */
   browserChecks: 'not_requested' | 'done' | 'incomplete';
   /** Browser failures (launch, rendering, mobile checks); also logged to events. */
@@ -107,12 +113,15 @@ export async function processCompany(company: CompanyRow, deps: ProcessDeps): Pr
     likely: [],
     contact: null,
     risk: null,
+    contactRisk: null,
+    contactStatus: null,
     browserChecks: 'not_requested',
     browserIssues: [],
   };
   const inspectionId = startInspection(db, company.id, deps.mode);
   updateCompany(db, company.id, { last_inspection_id: inspectionId });
   let capabilities: Capabilities | null = null;
+  let contactStatus: ContactStatus | null = null;
 
   try {
     if (isSuppressed(db, company.domain)) throw new Reject('suppressed');
@@ -261,28 +270,38 @@ export async function processCompany(company: CompanyRow, deps: ProcessDeps): Pr
     result.likely = observations.filter((o) => o.status === 'likely').map((o) => o.code);
     capabilities = detectCapabilities(textPages, platform, productCount);
 
-    // 5. Contacts (spec 8.5) and outreach risk per contact. No contact is a note, not a rejection.
+    // 5. Outreach risk for the recipient as such (market rules + recipient type) — always, whether
+    // or not an email exists. Then contacts (spec 8.5), each with a per-address refinement, and
+    // contact availability. None of this affects qualification; no contact is a note, not a rejection.
+    const recipientRisk = assessOutreachRisk(market, entity.entityType, null);
+    insertOutreachRisk(db, company.id, inspectionId, null, recipientRisk, RISK_RULES_VERSION);
+    result.risk = recipientRisk.risk;
+
     const mxCache = new Map<string, boolean>();
     const order: Record<OutreachRisk, number> = { low: 0, review_required: 1, high: 2 };
+    let usableEmails = 0;
     for (const c of extractContacts(textPages, company.domain)) {
       const host = c.email.split('@')[1]!;
       if (!mxCache.has(host)) mxCache.set(host, await deps.mxCheck(host));
       const mxOk = mxCache.get(host)!;
       const contactId = upsertContact(db, company.id, c, mxOk);
       if (!mxOk) continue;
+      usableEmails++;
       const risk = assessOutreachRisk(market, entity.entityType, c);
       insertOutreachRisk(db, company.id, inspectionId, contactId, risk, RISK_RULES_VERSION);
       // Contacts come best-first; keep the first one unless a later one carries lower risk.
-      if (!result.contact || order[risk.risk] < order[result.risk!]) {
+      if (!result.contact || order[risk.risk] < order[result.contactRisk!]) {
         result.contact = c.email;
-        result.risk = risk.risk;
+        result.contactRisk = risk.risk;
       }
     }
-    if (!result.contact) {
-      const risk = assessOutreachRisk(market, entity.entityType, null);
-      insertOutreachRisk(db, company.id, inspectionId, null, risk, RISK_RULES_VERSION);
-      result.risk = risk.risk;
-    }
+    contactStatus = contactStatusOf({
+      usableEmails,
+      inquiryForm: capabilities.flags.inquiry_form.present,
+      phone: textPages.some((p) => p.$('a[href^="tel:" i]').length > 0),
+      messenger: capabilities.flags.messenger_links.present,
+    });
+    result.contactStatus = contactStatus;
 
     setStatus(db, company.id, 'inspected');
     result.status = 'inspected';
@@ -298,6 +317,6 @@ export async function processCompany(company: CompanyRow, deps: ProcessDeps): Pr
       result.reason = message;
     }
   }
-  finishInspection(db, inspectionId, { status: result.status, reason: result.reason, capabilities });
+  finishInspection(db, inspectionId, { status: result.status, reason: result.reason, capabilities, contactStatus });
   return result;
 }

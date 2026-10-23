@@ -3,6 +3,7 @@ import { loadConfig } from '../src/config/load.js';
 import { detectCapabilities } from '../src/inspect/capabilities.js';
 import { capText, dedupeAcrossPages, extractMainTexts, internalLinks, mainTextLines } from '../src/inspect/extract.js';
 import { buildPageContext } from '../src/inspect/page.js';
+import { contactStatusOf } from '../src/outreach/contactStatus.js';
 import { assessOutreachRisk } from '../src/outreach/risk.js';
 
 const config = loadConfig();
@@ -182,9 +183,70 @@ describe('assessOutreachRisk', () => {
     expect(assessOutreachRisk(market('KZ'), 'too', role).risk).toBe('review_required');
   });
 
-  it('no usable contact: review_required with a clear reason', () => {
-    const r = assessOutreachRisk(market('NL'), 'bv', null);
+  it('recipient-level risk (no contact given) does not depend on whether an email exists', () => {
+    // A company is low risk even if no email was found; availability is contact_status.
+    expect(assessOutreachRisk(market('NL'), 'bv', null)).toMatchObject({ risk: 'low', recipientType: 'company_likely' });
+    expect(assessOutreachRisk(market('UK'), 'ltd', null).reason).not.toMatch(/email не найден/i);
+    // "low" is a preliminary risk, never worded as a legal permission.
+    expect(assessOutreachRisk(market('UK'), 'ltd', null).reason).toContain('Это не юридическое разрешение');
+  });
+
+  it('unknown legal status: review_required, explained by the legal form, not by contacts', () => {
+    const r = assessOutreachRisk(market('UK'), 'unknown', null);
+    expect(r).toMatchObject({ risk: 'review_required', confidence: 'low' });
+    expect(r.reason).toContain('Юридическая форма получателя неизвестна');
+    expect(r.toVerify).toContain('проверить юридическую форму в реестре или на сайте');
+  });
+
+  it('sole trader: high whether or not an email exists', () => {
+    expect(assessOutreachRisk(market('UK'), 'sole_trader', null).risk).toBe('high');
+    expect(assessOutreachRisk(market('UK'), 'sole_trader', role).risk).toBe('high');
+  });
+
+  it('market rules apply without a contact too: RU high, KZ review_required', () => {
+    expect(assessOutreachRisk(market('RU'), 'ooo', null).risk).toBe('high');
+    expect(assessOutreachRisk(market('KZ'), 'too', null).risk).toBe('review_required');
+  });
+
+  it('a public mailbox is treated as a possible working address, but not as low risk', () => {
+    const r = assessOutreachRisk(market('UK'), 'ltd', gmail);
     expect(r.risk).toBe('review_required');
-    expect(r.toVerify).toContain('найти публичный ролевой адрес компании');
+    expect(r.reason).toContain('может быть рабочий ящик');
+  });
+});
+
+describe('contactStatusOf', () => {
+  const none = { usableEmails: 0, inquiryForm: false, phone: false, messenger: false };
+  it('prefers email, then form, then phone/messenger', () => {
+    expect(contactStatusOf({ ...none, usableEmails: 1, inquiryForm: true, phone: true })).toBe('email');
+    expect(contactStatusOf({ ...none, inquiryForm: true, phone: true })).toBe('form_only');
+    expect(contactStatusOf({ ...none, phone: true })).toBe('phone_or_messenger');
+    expect(contactStatusOf({ ...none, messenger: true })).toBe('phone_or_messenger');
+    expect(contactStatusOf(none)).toBe('none');
+  });
+});
+
+describe('candidates report: risk vs contact availability', () => {
+  it('never shows an old "no email" row (rules 2026-10-23.1) as the recipient risk', async () => {
+    const { openDb } = await import('../src/db/connection.js');
+    const { migrate } = await import('../src/db/migrate.js');
+    const { buildCandidatesReport } = await import('../src/reports/candidates.js');
+    const db = openDb(':memory:');
+    migrate(db);
+    db.prepare(`INSERT INTO companies (id, domain, market, status, last_inspection_id, created_at, updated_at) VALUES ('cmp_1', 'a.co.uk', 'UK', 'inspected', 'ins_1', '', '')`).run();
+    db.prepare(`INSERT INTO inspections (id, company_id, mode, started_at, contact_status) VALUES ('ins_1', 'cmp_1', 'reinspect', 't', 'form_only')`).run();
+    const add = db.prepare(
+      `INSERT INTO outreach_risk (id, company_id, inspection_id, contact_id, jurisdiction, recipient_type, risk, reason, confidence,
+         unknowns_json, to_verify_json, rules_version, created_at)
+       VALUES (?, 'cmp_1', 'ins_1', NULL, 'UK', 'company_likely', ?, ?, 'medium', '[]', '[]', ?, 't')`,
+    );
+    add.run('ork_old', 'review_required', 'Рабочий публичный email не найден', '2026-10-23.1');
+    const legacy = buildCandidatesReport(db, 'UK').companies[0]!;
+    expect(legacy.recipientRisk).toBeNull();
+    expect(legacy.contact_status).toBe('form_only');
+
+    add.run('ork_new', 'low', 'Компания', '2026-10-23.2');
+    expect(buildCandidatesReport(db, 'UK').companies[0]!.recipientRisk).toMatchObject({ risk: 'low' });
+    db.close();
   });
 });

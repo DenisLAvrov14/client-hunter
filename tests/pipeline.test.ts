@@ -162,8 +162,45 @@ describe('processCompany', () => {
       ],
     });
     const r = await processCompany(company, deps);
-    expect(r).toMatchObject({ status: 'inspected', entity: 'unknown', verified: [], contact: null, risk: 'review_required' });
+    expect(r).toMatchObject({
+      status: 'inspected',
+      entity: 'unknown',
+      verified: [],
+      contact: null,
+      contactStatus: 'none',
+      risk: 'review_required',
+    });
     expect(db.prepare('SELECT contact_id, risk FROM outreach_risk').all()).toEqual([{ contact_id: null, risk: 'review_required' }]);
+    expect(db.prepare('SELECT contact_status FROM inspections').get()).toEqual({ contact_status: 'none' });
+  });
+
+  it('a company without email but with a form: contact form_only, outreach risk still low', async () => {
+    const { company, deps } = setup({
+      [`${ORIGIN}/robots.txt`]: [404, html, ''],
+      [`${ORIGIN}/`]: [
+        200,
+        html,
+        '<p>Northbridge Steel Ltd, company number 01234567.</p><form><input name="name"><textarea name="msg"></textarea></form>',
+      ],
+    });
+    expect(await processCompany(company, deps)).toMatchObject({ contact: null, contactStatus: 'form_only', risk: 'low' });
+  });
+
+  it('phone links only: contact phone_or_messenger', async () => {
+    const { company, deps } = setup({
+      [`${ORIGIN}/robots.txt`]: [404, html, ''],
+      [`${ORIGIN}/`]: [200, html, '<p>Jo Bloggs Photography</p><a href="tel:+441610000000">Call us</a>'],
+    });
+    expect(await processCompany(company, deps)).toMatchObject({ contactStatus: 'phone_or_messenger', risk: 'review_required' });
+  });
+
+  it('records one recipient-level risk plus one row per usable email', async () => {
+    const { db, company, deps } = setup(fullSite);
+    const r = await processCompany(company, deps);
+    expect(r).toMatchObject({ contactStatus: 'email', risk: 'low', contactRisk: 'low' });
+    const rows = db.prepare('SELECT contact_id IS NULL AS recipient, risk FROM outreach_risk ORDER BY recipient DESC').all();
+    expect(rows[0]).toEqual({ recipient: 1, risk: 'low' });
+    expect(rows.filter((x) => (x as { recipient: number }).recipient === 0)).toHaveLength(3);
   });
 
   it('keeps sole traders, marking cold email as high risk', async () => {
@@ -171,7 +208,13 @@ describe('processCompany', () => {
       [`${ORIGIN}/robots.txt`]: [404, html, ''],
       [`${ORIGIN}/`]: [200, html, '<p>Jo Bloggs Photography is a sole trader. <a href="mailto:jo@northbridge-example.co.uk">Email</a></p>'],
     });
-    expect(await processCompany(company, deps)).toMatchObject({ status: 'inspected', entity: 'sole_trader', risk: 'high' });
+    expect(await processCompany(company, deps)).toMatchObject({
+      status: 'inspected',
+      entity: 'sole_trader',
+      risk: 'high',
+      contactRisk: 'high',
+      contactStatus: 'email',
+    });
   });
 
   it('renders a JavaScript-only home page in a browser, but runs technical checks on the server HTML', async () => {
