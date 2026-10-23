@@ -2,17 +2,21 @@ import { registrableDomain } from '../util/domain.js';
 import { pageLinks } from './page.js';
 import type { PageContext, PageKind } from './types.js';
 
-// Order = priority when the page budget is tight.
+// Order = priority when the page budget is tight: pages that explain the business and how
+// customers buy come first; legal pages only fill spare slots.
+// EN / NL / RU words, plus RU transliterations common in URLs (kontakty, katalog, o-kompanii).
 const KIND_RULES: [PageKind, RegExp][] = [
-  // EN / NL / RU words, plus RU transliterations common in URLs (kontakty, katalog, o-kompanii).
-  ['contact', /contact|get-in-touch|kontakt|контакт|enquir|svyaz|связь/i],
+  ['about', /about|who-we-are|our-story|company|over-ons|over-|o-kompanii|o-nas|о-компании|о-нас|о компании/i],
+  ['services', /services|diensten|what-we-do|solutions|oplossingen|portfolio|our-work|werkzaamheden|uslugi|услуг|наши работы/i],
   ['catalog', /catalog|catalogue|catalogus|products|producten|assortiment|range|shop|collections|brochure|katalog|produkc|tovar|каталог|продукц|товар/i],
-  ['quote', /quote|quotation|request-a-price|offerte|prijs|price|prais|прайс|цен[аы]/i],
+  ['contact', /contact|get-in-touch|kontakt|контакт|enquir|svyaz|связь/i],
+  ['workflow', /quote|quotation|request-a-price|offerte|booking|book-online|appointment|reserv|afspraak|how-to-order|bestellen|order|pricing|prices|price|tarieven|prijs|zakaz|zapis|prais|stoimost|заказ|запис|прайс|стоимост|цен[аы]/i],
   ['legal', /terms|legal|privacy|impressum|imprint|disclaimer|cookie|voorwaarden|privacybeleid|rekvizit|politika|konfidenc|реквизит|политик/i],
-  ['about', /about|who-we-are|company|over-ons|over-|o-kompanii|o-nas|о-компании|о-нас|о компании/i],
 ];
 
-const SKIP = /\.(pdf|jpe?g|png|gif|webp|svg|zip|docx?|xlsx?)(\?|$)|\/(cart|checkout|account|login|basket|wp-admin)\b/i;
+// Files, account/checkout flows, and individual blog/news articles (we read about the business, not its blog).
+const SKIP =
+  /\.(pdf|jpe?g|png|gif|webp|svg|zip|docx?|xlsx?)(\?|$)|\/(cart|checkout|account|login|basket|wp-admin)\b|\/(blog|news|nieuws|novosti|articles?|stati|press|tag|category)\/[^/?#]+/i;
 
 export function classifyLink(href: string, text: string): PageKind | null {
   const path = new URL(href).pathname;
@@ -37,7 +41,7 @@ export function pickPages(home: PageContext, max: number): { url: string; kind: 
   }
 
   const picked: { url: string; kind: PageKind }[] = [];
-  // Round-robin over kinds in priority order: first contact, first catalog, ..., then second of each.
+  // Round-robin over kinds in priority order: first about, first services, ..., then second of each.
   for (let round = 0; picked.length < max; round++) {
     let added = false;
     for (const [kind] of KIND_RULES) {

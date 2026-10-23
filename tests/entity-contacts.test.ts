@@ -80,26 +80,34 @@ describe('extractContacts', () => {
     page(fixture('b2b-contact.html'), 'https://www.northbridge-example.co.uk/contact-us', 'contact'),
   ];
 
-  it('keeps role addresses on the company domain, best first; drops freemail and blocked locals', () => {
-    const emails = extractContacts(pages, 'northbridge-example.co.uk', uk, 'S2').map((c) => c.email);
-    expect(emails).toEqual(['sales@northbridge-example.co.uk', 'info@northbridge-example.co.uk']);
+  it('collects own-domain addresses first, then public mailboxes; drops service addresses', () => {
+    const contacts = extractContacts(pages, 'northbridge-example.co.uk');
+    expect(contacts.map((c) => c.email)).toEqual([
+      'sales@northbridge-example.co.uk',
+      'info@northbridge-example.co.uk',
+      'john.smith@gmail.com',
+    ]);
+    expect(contacts.map((c) => c.isFreemail)).toEqual([false, false, true]);
+    // accounts@ and jobs@ are on the page but are never outreach addresses.
+    expect(contacts.some((c) => /^(accounts|jobs)@/.test(c.email))).toBe(false);
   });
 
   it('de-obfuscates "name [at] domain"', () => {
-    const c = extractContacts([page('<p>quotes [at] acme.co.uk</p>')], 'acme.co.uk', uk, 'S2');
-    expect(c).toMatchObject([{ email: 'quotes@acme.co.uk', roleHint: 'enquiries' }]);
+    const c = extractContacts([page('<p>quotes [at] acme.co.uk</p>')], 'acme.co.uk');
+    expect(c).toMatchObject([{ email: 'quotes@acme.co.uk', roleHint: 'enquiries', isFreemail: false }]);
   });
 
-  it('named addresses only where the market allows them', () => {
-    const p = [page('<a href="mailto:jane.doe@acme.co.uk">Jane</a>')];
-    expect(extractContacts(p, 'acme.co.uk', uk, 'S2')).toHaveLength(1);
-    expect(extractContacts(p, 'acme.ie', ie, 'S2')).toHaveLength(0);
-  });
-
-  it('support@ only as an S1 fallback', () => {
-    const p = [page('<a href="mailto:support@acme.co.uk">s</a>')];
-    expect(extractContacts(p, 'acme.co.uk', uk, 'S2')).toHaveLength(0);
-    expect(extractContacts(p, 'acme.co.uk', uk, 'S1')).toHaveLength(1);
+  it('keeps named and support addresses (outreach risk decides later), ignores other domains', () => {
+    const p = [
+      page(
+        '<a href="mailto:jane.doe@acme.ie">Jane</a><a href="mailto:support@acme.ie">s</a>' +
+          '<p>Website by hello@webagency.example.com</p>',
+      ),
+    ];
+    expect(extractContacts(p, 'acme.ie').map((c) => [c.email, c.kind])).toEqual([
+      ['jane.doe@acme.ie', 'named'],
+      ['support@acme.ie', 'role'],
+    ]);
   });
 });
 

@@ -21,3 +21,4 @@ entity_markers_allow: ["ООО", "АО", "ПАО"]
 entity_markers_deny: ["ИП"]
 registry: none
 discovery_cities: ["Москва", "Санкт-Петербург"]  # OSM names
+cold_email_baseline: consent_required_all    # 38-FZ art. 18; outreach risk only

@@ -51,7 +51,7 @@ describe('HTML checks', () => {
   it('NO_QUOTE_FORM: not reported when an enquiry form exists', () => {
     const page = buildPageContext(
       BASE,
-      'quote',
+      'workflow',
       200,
       '<p>Price on request</p><a href="mailto:a@b.co.uk">a</a><form><input name="name"><textarea name="msg"></textarea></form>',
     );
@@ -108,15 +108,36 @@ describe('platform', () => {
 });
 
 describe('pickPages', () => {
-  it('picks internal pages by kind, contact first', () => {
+  it('picks internal pages by kind, business pages first', () => {
     const picked = pickPages(home, 5);
-    expect(picked[0]).toEqual({ url: `${BASE}contact-us`, kind: 'contact' });
+    expect(picked[0]).toEqual({ url: `${BASE}about`, kind: 'about' });
     expect(picked.map((p) => p.kind)).toEqual(expect.arrayContaining(['contact', 'catalog', 'about']));
     expect(picked.some((p) => p.url.endsWith('.pdf'))).toBe(false);
   });
 
   it('respects the page budget', () => {
     expect(pickPages(home, 1)).toHaveLength(1);
+  });
+
+  it('prefers business pages over legal ones and never opens blog articles', () => {
+    const site = buildPageContext(
+      BASE,
+      'home',
+      200,
+      [
+        '<a href="/privacy-policy">Privacy</a>',
+        '<a href="/blog/how-to-order-steel">How to order steel</a>',
+        '<a href="/our-services">Services</a>',
+        '<a href="/request-a-quote">Get a quote</a>',
+        '<a href="/about-us">About</a>',
+      ].join(''),
+    );
+    expect(pickPages(site, 3)).toEqual([
+      { url: `${BASE}about-us`, kind: 'about' },
+      { url: `${BASE}our-services`, kind: 'services' },
+      { url: `${BASE}request-a-quote`, kind: 'workflow' },
+    ]);
+    expect(pickPages(site, 10).some((p) => p.url.includes('/blog/'))).toBe(false);
   });
 });
 

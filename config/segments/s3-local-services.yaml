@@ -1,0 +1,29 @@
+# Local service businesses and independent professionals (docs/decisions.md, 2026-10-23).
+# Discovery only: many of these are sole traders, so most will carry outreach risk
+# review_required/high — they stay visible as opportunities regardless.
+code: S3
+name: Local services and independent professionals
+markets: [UK, IE, NL, KZ, RU]
+osm_tags:
+  - craft=photographer
+  - craft=tailor
+  - craft=dressmaker
+  - craft=upholsterer
+  - craft=jeweller
+  - craft=shoemaker
+  - craft=key_cutter
+  - shop=beauty
+  - shop=hairdresser
+  - shop=massage
+  - shop=tattoo
+  - shop=florist
+  - leisure=fitness_centre
+  - leisure=dance
+  - amenity=driving_school
+  - amenity=language_school
+  - amenity=music_school
+  - office=architect
+  - office=consulting
+  - office=event_management
+search_queries: []
+job_queries: []

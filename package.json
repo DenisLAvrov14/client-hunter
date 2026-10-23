@@ -13,6 +13,7 @@
     "check-config": "tsx src/cli/check-config.ts",
     "import-csv": "tsx src/cli/import-csv.ts",
     "report:candidates": "tsx src/cli/report.ts",
+    "reinspect": "tsx src/cli/reinspect.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",

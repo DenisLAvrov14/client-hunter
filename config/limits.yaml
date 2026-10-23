@@ -12,3 +12,5 @@ max_llm_cost_usd_per_month: 40
 max_queue_per_day: 10
 max_nav_links_checked: 10        # BROKEN_INTERNAL_LINKS; spec allows up to 20
 overpass_timeout_s: 120
+page_main_text_max_chars: 4000   # cleaned main content saved per page (pages.main_text)
+page_links_max: 40               # internal links saved per page, for targeted extra pages later

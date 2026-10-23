@@ -20,3 +20,4 @@ entity_markers_allow: ["ТОО", "АО"]
 entity_markers_deny: ["ИП"]
 registry: none
 discovery_cities: ["Алматы", "Астана"]          # OSM names; Karaganda not found under its common spellings
+cold_email_baseline: unverified              # advertising law not checked yet (spec 3.6)

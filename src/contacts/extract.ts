@@ -1,4 +1,3 @@
-import type { MarketConfig, SegmentCode } from '../config/schema.js';
 import { mailtoAddresses } from '../inspect/page.js';
 import type { PageContext } from '../inspect/types.js';
 import { emailOnDomain } from '../util/domain.js';
@@ -9,14 +8,19 @@ export interface ContactCandidate {
   email: string;
   kind: 'role' | 'named';
   roleHint: RoleHint;
+  /** Public mailbox provider (gmail, outlook, ISP mail): usually an individual, see outreach risk. */
+  isFreemail: boolean;
   foundOnUrl: string;
 }
 
-const FREEMAIL = new Set([
-  'gmail.com', 'googlemail.com', 'yahoo.com', 'yahoo.co.uk', 'hotmail.com', 'hotmail.co.uk', 'outlook.com',
-  'live.com', 'live.co.uk', 'msn.com', 'aol.com', 'icloud.com', 'me.com', 'btinternet.com', 'sky.com',
-  'virginmedia.com', 'protonmail.com', 'proton.me', 'gmx.com', 'mail.ru', 'yandex.ru', 'ya.ru', 'bk.ru',
-  'list.ru', 'inbox.ru', 'rambler.ru',
+// Public mailbox providers and ISP mail across our markets.
+export const FREEMAIL = new Set([
+  'gmail.com', 'googlemail.com', 'yahoo.com', 'yahoo.co.uk', 'yahoo.ie', 'hotmail.com', 'hotmail.co.uk', 'hotmail.nl',
+  'outlook.com', 'outlook.ie', 'outlook.nl', 'live.com', 'live.co.uk', 'live.ie', 'live.nl', 'msn.com', 'aol.com',
+  'icloud.com', 'me.com', 'mac.com', 'btinternet.com', 'sky.com', 'virginmedia.com', 'talktalk.net', 'eircom.net',
+  'ziggo.nl', 'kpnmail.nl', 'planet.nl', 'home.nl', 'hetnet.nl', 'xs4all.nl', 'protonmail.com', 'proton.me',
+  'gmx.com', 'gmx.net', 'mail.ru', 'yandex.ru', 'yandex.kz', 'ya.ru', 'bk.ru', 'list.ru', 'inbox.ru', 'rambler.ru',
+  'mail.kz',
 ]);
 
 // spec 8.5: never write to these.
@@ -47,13 +51,13 @@ function roleOf(local: string): RoleHint {
   return 'named';
 }
 
-/** Extracts candidate addresses on the company's own domain, filtered by the market profile, best first. */
-export function extractContacts(
-  pages: PageContext[],
-  companyDomain: string,
-  market: MarketConfig,
-  segment: SegmentCode,
-): ContactCandidate[] {
+/**
+ * Every publicly advertised business address on the site: the company's own domain, or a public
+ * mailbox (gmail etc., common for independents). Addresses on unrelated domains (e.g. the web
+ * agency's) are ignored. Whether an address may be cold-emailed is decided separately by
+ * outreach risk, not here. Own-domain first, then by role.
+ */
+export function extractContacts(pages: PageContext[], companyDomain: string): ContactCandidate[] {
   const found = new Map<string, ContactCandidate>();
   for (const page of pages) {
     const raw = [...mailtoAddresses(page), ...(page.text.match(EMAIL_IN_TEXT) ?? [])];
@@ -61,18 +65,14 @@ export function extractContacts(
       const email = normalize(r);
       if (!/^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/.test(email) || found.has(email)) continue;
       const [local, host] = email.split('@') as [string, string];
-      if (FREEMAIL.has(host)) {
-        if (!market.allow_freemail_addresses) continue;
-      } else if (!emailOnDomain(email, companyDomain)) {
-        continue;
-      }
+      const isFreemail = FREEMAIL.has(host);
+      if (!isFreemail && !emailOnDomain(email, companyDomain)) continue;
       if (BLOCKED_LOCAL.test(local)) continue;
       const roleHint = roleOf(local);
-      // support@ is only a fallback for Shopify stores (spec 8.5).
-      if (roleHint === 'support' && segment !== 'S1') continue;
-      if (roleHint === 'named' && !market.allow_named_business_address) continue;
-      found.set(email, { email, kind: roleHint === 'named' ? 'named' : 'role', roleHint, foundOnUrl: page.url });
+      found.set(email, { email, kind: roleHint === 'named' ? 'named' : 'role', roleHint, isFreemail, foundOnUrl: page.url });
     }
   }
-  return [...found.values()].sort((a, b) => PRIORITY[a.roleHint] - PRIORITY[b.roleHint]);
+  return [...found.values()].sort(
+    (a, b) => Number(a.isFreemail) - Number(b.isFreemail) || PRIORITY[a.roleHint] - PRIORITY[b.roleHint],
+  );
 }

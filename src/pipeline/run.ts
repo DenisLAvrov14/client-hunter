@@ -3,7 +3,7 @@ import pLimit from 'p-limit';
 import type { Config } from '../config/load.js';
 import { dnsMxChecker } from '../contacts/mx.js';
 import type { Db } from '../db/connection.js';
-import { companiesToProcess, finishRun, startRun, upsertDiscovered } from '../db/repo.js';
+import { companiesToProcess, finishRun, startRun, upsertDiscovered, type CompanyRow } from '../db/repo.js';
 import { DomainThrottle, HttpFetcher } from '../inspect/fetcher.js';
 import { PlaywrightInspector } from '../inspect/mobile.js';
 import type { DiscoverySource } from '../sources/types.js';
@@ -58,6 +58,32 @@ export async function runPipeline(
   }
 
   const companies = companiesToProcess(db, opts.market, opts.segment, opts.limit);
+  const { results, errors: inspectErrors } = await inspectCompanies(
+    db,
+    config,
+    companies,
+    { browser: opts.browser, mode: 'discover' },
+    onProgress,
+  );
+  errors.push(...inspectErrors);
+
+  finishRun(db, runId, {
+    discovered: discoveredNew,
+    inspected: results.filter((r) => r.result.status === 'inspected').length,
+    rejected_auto: results.filter((r) => r.result.status === 'rejected_auto').length,
+    errors,
+  });
+  return { runId, discoveredNew, results };
+}
+
+/** Inspects the given companies with bounded concurrency; market and segment come from each company row. */
+export async function inspectCompanies(
+  db: Db,
+  config: Config,
+  companies: CompanyRow[],
+  opts: { browser: boolean; mode: 'discover' | 'reinspect' },
+  onProgress: (done: number, total: number, domain: string, r: ProcessResult) => void = () => {},
+): Promise<{ results: RunOutcome['results']; errors: string[] }> {
   const fetcher = new HttpFetcher({
     userAgent: config.app.user_agent,
     timeoutMs: config.limits.request_timeout_ms,
@@ -68,6 +94,7 @@ export async function runPipeline(
   const mobile = opts.browser ? new PlaywrightInspector(config.app.user_agent, config.limits.request_timeout_ms * 2) : null;
   const limit = pLimit(config.limits.max_concurrent_sites);
   const results: RunOutcome['results'] = [];
+  const errors: string[] = [];
 
   try {
     await Promise.all(
@@ -78,12 +105,15 @@ export async function runPipeline(
             fetcher,
             mobile,
             mxCheck: dnsMxChecker,
-            market,
-            segment: opts.segment,
+            market: config.markets.get(company.market)!,
+            segment: company.segment ?? 'S2',
             robotsToken: config.app.robots_token,
             maxPages: config.limits.max_pages_per_site,
             maxNavLinks: config.limits.max_nav_links_checked,
+            mainTextMaxChars: config.limits.page_main_text_max_chars,
+            linksMax: config.limits.page_links_max,
             screenshotRoot: path.resolve(config.app.data_dir, 'screenshots'),
+            mode: opts.mode,
           });
           if (result.status === 'error') errors.push(`${company.domain}: ${result.reason}`);
           results.push({ domain: company.domain, name: company.name, city: company.city, result });
@@ -94,12 +124,5 @@ export async function runPipeline(
   } finally {
     await mobile?.close();
   }
-
-  finishRun(db, runId, {
-    discovered: discoveredNew,
-    inspected: results.filter((r) => ['inspected', 'contact_found'].includes(r.result.status) || r.result.verified.length > 0).length,
-    rejected_auto: results.filter((r) => r.result.status === 'rejected_auto').length,
-    errors,
-  });
-  return { runId, discoveredNew, results };
+  return { results, errors };
 }

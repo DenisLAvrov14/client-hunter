@@ -1,7 +1,10 @@
 import { createHash } from 'node:crypto';
 import type { MarketCode, SegmentCode } from '../config/schema.js';
 import type { ContactCandidate } from '../contacts/extract.js';
+import type { Capabilities } from '../inspect/capabilities.js';
+import type { PageLink } from '../inspect/extract.js';
 import type { ObservationDraft, PageContext } from '../inspect/types.js';
+import type { RiskAssessment } from '../outreach/risk.js';
 import type { CandidateCompany } from '../sources/types.js';
 import { registrableDomain } from '../util/domain.js';
 import { newId } from '../util/ids.js';
@@ -13,8 +16,8 @@ export type CompanyStatus =
   | 'discovered'
   | 'website_resolved'
   | 'entity_checked'
-  | 'inspected'
-  | 'contact_found'
+  | 'inspected' // final state of a successful inspection since migration 002
+  | 'contact_found' // legacy final state (before 002): had a contact and a verified finding
   | 'rejected_auto'
   | 'error';
 
@@ -33,6 +36,7 @@ export interface CompanyRow {
   registry_status: string | null;
   status: CompanyStatus;
   reject_reason: string | null;
+  last_inspection_id: string | null;
 }
 
 export function isSuppressed(db: Db, domain: string): boolean {
@@ -88,36 +92,137 @@ export function setStatus(db: Db, id: string, status: CompanyStatus, rejectReaso
   logEvent(db, id, `status:${status}`, rejectReason ? { reason: rejectReason } : null);
 }
 
-export function insertPage(db: Db, companyId: string, page: PageContext): void {
+/** Opens an inspection record; every page/observation/risk row of this run points to it. */
+export function startInspection(db: Db, companyId: string, mode: 'discover' | 'reinspect'): string {
+  const id = newId('inspection');
+  db.prepare('INSERT INTO inspections (id, company_id, mode, started_at) VALUES (?, ?, ?, ?)').run(id, companyId, mode, now());
+  return id;
+}
+
+export function finishInspection(
+  db: Db,
+  id: string,
+  result: { status: CompanyStatus; reason: string | null; capabilities: Capabilities | null },
+): void {
   db.prepare(
-    `INSERT INTO pages (id, company_id, url, kind, http_status, fetched_at, content_hash, text_excerpt)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    'UPDATE inspections SET finished_at = ?, result_status = ?, result_reason = ?, capabilities_json = ? WHERE id = ?',
+  ).run(now(), result.status, result.reason, result.capabilities ? JSON.stringify(result.capabilities) : null, id);
+}
+
+export function insertPage(
+  db: Db,
+  companyId: string,
+  inspectionId: string,
+  page: PageContext,
+  extracted: { mainText: string; links: PageLink[] },
+): void {
+  db.prepare(
+    `INSERT INTO pages (id, company_id, inspection_id, url, kind, http_status, fetched_at, content_hash, text_excerpt, main_text, links_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     newId('page'),
     companyId,
+    inspectionId,
     page.url,
     page.kind,
     page.status,
     now(),
     createHash('sha256').update(page.html).digest('hex'),
     page.text.slice(0, 2000),
+    extracted.mainText,
+    JSON.stringify(extracted.links),
   );
 }
 
-export function insertObservation(db: Db, companyId: string, o: ObservationDraft): string {
+export function insertObservation(db: Db, companyId: string, inspectionId: string, o: ObservationDraft): string {
   const id = newId('observation');
   db.prepare(
-    `INSERT INTO observations (id, company_id, code, status, description, evidence_url, evidence_detail, screenshot_path, collected_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(id, companyId, o.code, o.status, o.description, o.evidenceUrl ?? null, o.evidenceDetail ?? null, o.screenshotPath ?? null, now());
+    `INSERT INTO observations (id, company_id, inspection_id, code, status, description, evidence_url, evidence_detail, screenshot_path, collected_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    id,
+    companyId,
+    inspectionId,
+    o.code,
+    o.status,
+    o.description,
+    o.evidenceUrl ?? null,
+    o.evidenceDetail ?? null,
+    o.screenshotPath ?? null,
+    now(),
+  );
   return id;
 }
 
-export function insertContact(db: Db, companyId: string, c: ContactCandidate, mxOk: boolean): void {
+/** Inserts or refreshes a contact; never touches its delivery status (bounced stays bounced). Returns its id. */
+export function upsertContact(db: Db, companyId: string, c: ContactCandidate, mxOk: boolean): string {
   db.prepare(
-    `INSERT OR IGNORE INTO contacts (id, company_id, email, kind, role_hint, found_on_url, mx_ok, status, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'ok', ?)`,
-  ).run(newId('contact'), companyId, c.email, c.kind, c.roleHint, c.foundOnUrl, mxOk ? 1 : 0, now());
+    `INSERT INTO contacts (id, company_id, email, kind, role_hint, found_on_url, mx_ok, status, created_at, is_freemail, last_seen_at)
+     VALUES (@id, @companyId, @email, @kind, @roleHint, @foundOnUrl, @mxOk, 'ok', @now, @isFreemail, @now)
+     ON CONFLICT(company_id, email) DO UPDATE SET
+       kind = excluded.kind, role_hint = excluded.role_hint, mx_ok = excluded.mx_ok,
+       is_freemail = excluded.is_freemail, last_seen_at = excluded.last_seen_at`,
+  ).run({
+    id: newId('contact'),
+    companyId,
+    email: c.email,
+    kind: c.kind,
+    roleHint: c.roleHint,
+    foundOnUrl: c.foundOnUrl,
+    mxOk: mxOk ? 1 : 0,
+    isFreemail: c.isFreemail ? 1 : 0,
+    now: now(),
+  });
+  return (db.prepare('SELECT id FROM contacts WHERE company_id = ? AND email = ?').get(companyId, c.email) as { id: string }).id;
+}
+
+export function insertOutreachRisk(
+  db: Db,
+  companyId: string,
+  inspectionId: string,
+  contactId: string | null,
+  r: RiskAssessment,
+  rulesVersion: string,
+): void {
+  db.prepare(
+    `INSERT INTO outreach_risk (id, company_id, inspection_id, contact_id, jurisdiction, recipient_type, risk, reason,
+       confidence, unknowns_json, to_verify_json, rules_version, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    newId('outreachRisk'),
+    companyId,
+    inspectionId,
+    contactId,
+    r.jurisdiction,
+    r.recipientType,
+    r.risk,
+    r.reason,
+    r.confidence,
+    JSON.stringify(r.unknowns),
+    JSON.stringify(r.toVerify),
+    rulesVersion,
+    now(),
+  );
+}
+
+/** Companies whose earlier inspection ended in one of `reasons` (or a legacy candidate), for re-inspection. */
+export function companiesForReinspection(
+  db: Db,
+  opts: { markets: MarketCode[]; reasons: string[]; includeLegacyCandidates: boolean; limit: number; random?: boolean },
+): CompanyRow[] {
+  const reasonClauses = opts.reasons.map(() => `(status = 'rejected_auto' AND (reject_reason = ? OR reject_reason LIKE ? || ':%'))`);
+  if (opts.includeLegacyCandidates) reasonClauses.push(`status = 'contact_found'`);
+  if (reasonClauses.length === 0) return [];
+  const params = opts.reasons.flatMap((r) => [r, r]);
+  return db
+    .prepare(
+      `SELECT * FROM companies
+       WHERE market IN (${opts.markets.map(() => '?').join(', ')})
+         AND last_inspection_id IS NULL
+         AND (${reasonClauses.join(' OR ')})
+       ORDER BY ${opts.random ? 'random()' : 'market, domain'} LIMIT ?`,
+    )
+    .all(...opts.markets, ...params, opts.limit) as CompanyRow[];
 }
 
 export function logEvent(db: Db, companyId: string | null, type: string, data: unknown): void {

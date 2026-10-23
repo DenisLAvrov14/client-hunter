@@ -4,16 +4,21 @@ import { extractContacts } from '../contacts/extract.js';
 import type { MxChecker } from '../contacts/mx.js';
 import type { Db } from '../db/connection.js';
 import {
-  insertContact,
+  finishInspection,
   insertObservation,
+  insertOutreachRisk,
   insertPage,
   isSuppressed,
   setStatus,
+  startInspection,
   updateCompany,
+  upsertContact,
   type CompanyRow,
 } from '../db/repo.js';
 import { detectEntity } from '../entity/detect.js';
+import { detectCapabilities, type Capabilities } from '../inspect/capabilities.js';
 import { runHtmlChecks } from '../inspect/checks.js';
+import { extractMainTexts, internalLinks } from '../inspect/extract.js';
 import { FetchError, type Fetcher, type FetchResult } from '../inspect/fetcher.js';
 import { checkBrokenNavLinks, confirmBrokenImages } from '../inspect/links.js';
 import type { MobileInspector, MobileTarget } from '../inspect/mobile.js';
@@ -23,6 +28,7 @@ import { detectPlatform, isShopifyPasswordPage, looksParked } from '../inspect/p
 import { robotsFromResponse, type RobotsPolicy } from '../inspect/robots.js';
 import { countShopifyProducts } from '../inspect/shopify.js';
 import type { ObservationDraft, PageContext } from '../inspect/types.js';
+import { assessOutreachRisk, RISK_RULES_VERSION, type OutreachRisk } from '../outreach/risk.js';
 import { registrableDomain } from '../util/domain.js';
 
 export interface ProcessDeps {
@@ -35,7 +41,10 @@ export interface ProcessDeps {
   robotsToken: string;
   maxPages: number;
   maxNavLinks: number;
+  mainTextMaxChars: number;
+  linksMax: number;
   screenshotRoot: string;
+  mode: 'discover' | 'reinspect';
 }
 
 export interface ProcessResult {
@@ -46,6 +55,8 @@ export interface ProcessResult {
   verified: string[];
   likely: string[];
   contact: string | null;
+  /** Outreach risk of the best contact; informational, never part of qualification. */
+  risk: OutreachRisk | null;
 }
 
 class Reject extends Error {
@@ -69,7 +80,12 @@ async function resolveOrigin(
   }
 }
 
-/** Runs one company through website → entity → inspection → contacts (spec 6, 8). Never throws for site problems. */
+/**
+ * Runs one company through website → entity → inspection → contacts → outreach risk (spec 6, 8).
+ * Only an unusable site rejects (unreachable, robots, parked, offsite redirect). Legal form,
+ * missing contacts and the absence of technical problems are recorded, never rejected
+ * (docs/decisions.md). Never throws for site problems.
+ */
 export async function processCompany(company: CompanyRow, deps: ProcessDeps): Promise<ProcessResult> {
   const { db, fetcher, market } = deps;
   const result: ProcessResult = {
@@ -80,7 +96,11 @@ export async function processCompany(company: CompanyRow, deps: ProcessDeps): Pr
     verified: [],
     likely: [],
     contact: null,
+    risk: null,
   };
+  const inspectionId = startInspection(db, company.id, deps.mode);
+  updateCompany(db, company.id, { last_inspection_id: inspectionId });
+  let capabilities: Capabilities | null = null;
 
   try {
     if (isSuppressed(db, company.domain)) throw new Reject('suppressed');
@@ -140,9 +160,13 @@ export async function processCompany(company: CompanyRow, deps: ProcessDeps): Pr
     }
 
     // 2. Pick and fetch important pages.
+    // Pages disallowed by robots.txt do not use up the budget; fetch attempts stay bounded.
     const pages: PageContext[] = [home];
-    for (const target of pickPages(home, deps.maxPages - 1)) {
+    let attempts = 0;
+    for (const target of pickPages(home, deps.maxPages * 3)) {
+      if (pages.length >= deps.maxPages || attempts >= deps.maxPages * 2) break;
       if (!(await robotsFor(target.url)).isAllowed(target.url)) continue;
+      attempts++;
       try {
         const res = await fetcher.fetch(target.url);
         if (res.status < 400 && res.contentType.includes('html')) {
@@ -152,10 +176,17 @@ export async function processCompany(company: CompanyRow, deps: ProcessDeps): Pr
         // One failing subpage does not fail the company.
       }
     }
-    for (const page of pages) insertPage(db, company.id, page);
+    const mainTexts = extractMainTexts(pages, deps.mainTextMaxChars);
+    pages.forEach((page, i) =>
+      insertPage(db, company.id, inspectionId, page, {
+        mainText: mainTexts[i] ?? '',
+        links: internalLinks(page, deps.linksMax),
+      }),
+    );
     setStatus(db, company.id, 'website_resolved');
 
-    // 3. Legal entity (spec 8.6). No registry lookup without a Companies House key.
+    // 3. Legal entity (spec 8.6): recorded for outreach risk only, never a filter.
+    // No registry lookup without a Companies House key.
     const entity = detectEntity(pages, market);
     result.entity = entity.entityType;
     updateCompany(db, company.id, {
@@ -164,10 +195,6 @@ export async function processCompany(company: CompanyRow, deps: ProcessDeps): Pr
       registry_id: entity.registryId,
       registry_status: 'not_checked',
     });
-    if (market.require_corporate_entity) {
-      if (entity.entityType === 'sole_trader') throw new Reject('entity_sole_trader');
-      if (entity.entityType === 'unknown') throw new Reject('entity_unknown');
-    }
     setStatus(db, company.id, 'entity_checked');
 
     // 4. Inspection.
@@ -184,7 +211,7 @@ export async function processCompany(company: CompanyRow, deps: ProcessDeps): Pr
     if (broken) observations.push(broken);
     if (deps.mobile) {
       const targets: MobileTarget[] = [{ url: home.url, kind: 'home' }];
-      for (const p of pages) if ((p.kind === 'contact' || p.kind === 'quote') && hasInquiryForm(p)) targets.push({ url: p.url, kind: 'form' });
+      for (const p of pages) if ((p.kind === 'contact' || p.kind === 'workflow') && hasInquiryForm(p)) targets.push({ url: p.url, kind: 'form' });
       for (const o of await deps.mobile.inspect(targets, path.join(deps.screenshotRoot, company.id))) {
         if (o.code !== 'BROKEN_IMAGES') {
           observations.push(o);
@@ -194,29 +221,36 @@ export async function processCompany(company: CompanyRow, deps: ProcessDeps): Pr
         if (confirmed) observations.push(confirmed);
       }
     }
-    for (const o of observations) insertObservation(db, company.id, o);
+    for (const o of observations) insertObservation(db, company.id, inspectionId, o);
     result.verified = observations.filter((o) => o.status === 'verified').map((o) => o.code);
     result.likely = observations.filter((o) => o.status === 'likely').map((o) => o.code);
-    setStatus(db, company.id, 'inspected');
+    capabilities = detectCapabilities(pages, platform, productCount);
 
-    // 5. Contacts (spec 8.5).
-    const candidates = extractContacts(pages, company.domain, market, deps.segment);
-    if (candidates.length === 0) throw new Reject('no_contact');
+    // 5. Contacts (spec 8.5) and outreach risk per contact. No contact is a note, not a rejection.
     const mxCache = new Map<string, boolean>();
-    let firstOk: string | null = null;
-    for (const c of candidates) {
+    const order: Record<OutreachRisk, number> = { low: 0, review_required: 1, high: 2 };
+    for (const c of extractContacts(pages, company.domain)) {
       const host = c.email.split('@')[1]!;
       if (!mxCache.has(host)) mxCache.set(host, await deps.mxCheck(host));
-      const ok = mxCache.get(host)!;
-      insertContact(db, company.id, c, ok);
-      if (ok && !firstOk) firstOk = c.email;
+      const mxOk = mxCache.get(host)!;
+      const contactId = upsertContact(db, company.id, c, mxOk);
+      if (!mxOk) continue;
+      const risk = assessOutreachRisk(market, entity.entityType, c);
+      insertOutreachRisk(db, company.id, inspectionId, contactId, risk, RISK_RULES_VERSION);
+      // Contacts come best-first; keep the first one unless a later one carries lower risk.
+      if (!result.contact || order[risk.risk] < order[result.risk!]) {
+        result.contact = c.email;
+        result.risk = risk.risk;
+      }
     }
-    if (!firstOk) throw new Reject('no_mx');
-    result.contact = firstOk;
+    if (!result.contact) {
+      const risk = assessOutreachRisk(market, entity.entityType, null);
+      insertOutreachRisk(db, company.id, inspectionId, null, risk, RISK_RULES_VERSION);
+      result.risk = risk.risk;
+    }
 
-    if (result.verified.length === 0) throw new Reject('no_verified_observation');
-    setStatus(db, company.id, 'contact_found');
-    result.status = 'contact_found';
+    setStatus(db, company.id, 'inspected');
+    result.status = 'inspected';
   } catch (err) {
     if (err instanceof Reject) {
       setStatus(db, company.id, 'rejected_auto', err.reason);
@@ -229,5 +263,6 @@ export async function processCompany(company: CompanyRow, deps: ProcessDeps): Pr
       result.reason = message;
     }
   }
+  finishInspection(db, inspectionId, { status: result.status, reason: result.reason, capabilities });
   return result;
 }

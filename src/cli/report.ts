@@ -19,4 +19,4 @@ const db = openDb(path.resolve(config.app.db_file));
 migrate(db);
 const { md, csv, report } = writeCandidatesReport(db, market.data, config.app.data_dir);
 db.close();
-process.stdout.write(`Кандидатов: ${report.candidates.length}\nОтчёт: ${md}\nCSV:   ${csv}\n`);
+process.stdout.write(`Компаний в отчёте: ${report.companies.length}\nОтчёт: ${md}\nCSV:   ${csv}\n`);

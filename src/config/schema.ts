@@ -55,6 +55,8 @@ export const LimitsSchema = z.strictObject({
   max_queue_per_day: z.number().int().positive(),
   max_nav_links_checked: z.number().int().min(0).max(20),
   overpass_timeout_s: z.number().int().positive().max(180),
+  page_main_text_max_chars: z.number().int().min(500).max(20000),
+  page_links_max: z.number().int().min(0).max(200),
 });
 
 const TokenPrice = z.strictObject({
@@ -161,6 +163,11 @@ export const MarketSchema = z
     entity_markers_deny: z.array(z.string().min(1)),
     registry: z.enum(['companies_house', 'none']),
     discovery_cities: z.array(z.string().min(1)).default([]),
+    // Baseline for outreach risk (src/outreach/risk.ts), not a discovery filter:
+    // allowed_for_companies = companies yes, individuals/sole traders need consent (PECR, ePrivacy, Tw 11.7);
+    // consent_required_all = prior consent for any advertising email (RU 38-FZ);
+    // unverified = the rules for this market have not been checked yet.
+    cold_email_baseline: z.enum(['allowed_for_companies', 'consent_required_all', 'unverified']),
   })
   .refine((m) => m.followup_delays_days.length === m.followups, {
     message: 'followup_delays_days must have exactly `followups` entries',

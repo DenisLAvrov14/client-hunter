@@ -24,7 +24,7 @@ describe('loadConfig', () => {
   it('loads the repository config', () => {
     const config = loadConfig(realConfig);
     expect([...config.markets.keys()].sort()).toEqual(['IE', 'KZ', 'NL', 'RU', 'UK']);
-    expect([...config.segments.keys()].sort()).toEqual(['S1', 'S2']);
+    expect([...config.segments.keys()].sort()).toEqual(['S1', 'S2', 'S3']);
     expect(config.markets.get('UK')?.registry).toBe('companies_house');
   });
 

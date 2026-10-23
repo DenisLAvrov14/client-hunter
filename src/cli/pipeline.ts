@@ -5,15 +5,10 @@ import { openDb } from '../db/connection.js';
 import { migrate } from '../db/migrate.js';
 import { PIPELINE_USAGE, UsageError, parsePipelineArgs } from '../pipeline/args.js';
 import type { ProcessResult } from '../pipeline/processCompany.js';
+import { describeResult } from './format.js';
 import { runPipeline } from '../pipeline/run.js';
 import { writeCandidatesReport } from '../reports/candidates.js';
 import { OsmSource } from '../sources/osm.js';
-
-function describe(r: ProcessResult): string {
-  if (r.status === 'contact_found') return `✅ кандидат · ${r.verified.join(', ')} · ${r.contact}`;
-  if (r.status === 'rejected_auto') return `✖ ${r.reason}`;
-  return `⚠ ошибка: ${r.reason}`;
-}
 
 async function main(): Promise<number> {
   const argv = process.argv.slice(2);
@@ -54,7 +49,7 @@ async function main(): Promise<number> {
 
   const source = new OsmSource(config.app.user_agent, config.limits.overpass_timeout_s);
   const outcome = await runPipeline(db, config, args, source, (done, total, domain, r) => {
-    out.write(`[${String(done).padStart(String(total).length)}/${total}] ${domain.padEnd(32)} ${describe(r)}\n`);
+    out.write(`[${String(done).padStart(String(total).length)}/${total}] ${domain.padEnd(32)} ${describeResult(r)}\n`);
   });
 
   const { md, csv, report } = writeCandidatesReport(db, args.market, config.app.data_dir);
@@ -67,8 +62,8 @@ async function main(): Promise<number> {
       '',
       '── Итог прогона ──',
       `Новых компаний найдено: ${outcome.discoveredNew}`,
-      `Проверено: ${results.length} · кандидатов: ${count('contact_found')} · отсеяно: ${count('rejected_auto')} · ошибок: ${count('error')}`,
-      `Всего кандидатов по ${args.market} в базе: ${report.candidates.length}`,
+      `Проверено: ${results.length} · пригодны для анализа: ${count('inspected')} (с проверенными находками: ${results.filter((r) => r.verified.length > 0).length}) · отсеяно: ${count('rejected_auto')} · ошибок: ${count('error')}`,
+      `Всего пригодных компаний по ${args.market} в базе: ${report.companies.length}`,
       '',
       `Отчёт: ${md}`,
       `CSV:   ${csv}`,

@@ -1,6 +1,17 @@
 import type { CheerioAPI } from 'cheerio';
 
-export type PageKind = 'home' | 'contact' | 'catalog' | 'quote' | 'about' | 'product' | 'legal' | 'other';
+// 'workflow' = a customer action page: quote request, booking, ordering, pricing. Pages saved
+// before migration 002 may still carry the old kind 'quote'.
+export type PageKind =
+  | 'home'
+  | 'about'
+  | 'services'
+  | 'catalog'
+  | 'contact'
+  | 'workflow'
+  | 'product'
+  | 'legal'
+  | 'other';
 
 export type ObservationCode =
   | 'PDF_CATALOG'

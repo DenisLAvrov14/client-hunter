@@ -2,8 +2,9 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { MarketCode } from '../config/schema.js';
 import type { Db } from '../db/connection.js';
+import type { Capabilities } from '../inspect/capabilities.js';
 
-interface CandidateRow {
+interface CompanyReportRow {
   id: string;
   name: string | null;
   domain: string;
@@ -14,6 +15,8 @@ interface CandidateRow {
   entity_type: string | null;
   entity_evidence: string | null;
   registry_id: string | null;
+  last_inspection_id: string | null;
+  capabilities_json: string | null;
 }
 
 interface ObservationRow {
@@ -25,37 +28,64 @@ interface ObservationRow {
   screenshot_path: string | null;
 }
 
+interface RiskRow {
+  email: string | null;
+  is_freemail: number | null;
+  risk: string;
+  reason: string;
+  recipient_type: string;
+}
+
+export interface CompanyReport extends CompanyReportRow {
+  observations: ObservationRow[];
+  risks: RiskRow[];
+  capabilities: string[];
+}
+
 export interface CandidatesReport {
-  candidates: (CandidateRow & { observations: ObservationRow[]; contacts: string[] })[];
+  companies: CompanyReport[];
   funnel: { status: string; count: number }[];
   rejectReasons: { reason: string; count: number }[];
 }
 
+const RISK_ORDER = "CASE r.risk WHEN 'low' THEN 0 WHEN 'review_required' THEN 1 ELSE 2 END";
+
+/**
+ * Every usable inspected company of a market with the evidence of its latest inspection.
+ * Companies inspected before migration 002 (status contact_found) are included until re-inspected.
+ */
 export function buildCandidatesReport(db: Db, market: MarketCode): CandidatesReport {
-  const candidates = (
-    db
-      .prepare(
-        `SELECT id, name, domain, website_url, city, segment, platform, entity_type, entity_evidence, registry_id
-         FROM companies WHERE market = ? AND status = 'contact_found' ORDER BY segment, domain`,
-      )
-      .all(market) as CandidateRow[]
-  ).map((c) => ({
-    ...c,
-    observations: db
-      .prepare(
-        `SELECT code, status, description, evidence_url, evidence_detail, screenshot_path FROM observations
-         WHERE company_id = ? ORDER BY CASE status WHEN 'verified' THEN 0 WHEN 'likely' THEN 1 ELSE 2 END, code`,
-      )
-      .all(c.id) as ObservationRow[],
-    contacts: (
-      db
+  const rows = db
+    .prepare(
+      `SELECT c.id, c.name, c.domain, c.website_url, c.city, c.segment, c.platform, c.entity_type, c.entity_evidence,
+              c.registry_id, c.last_inspection_id, i.capabilities_json
+       FROM companies c LEFT JOIN inspections i ON i.id = c.last_inspection_id
+       WHERE c.market = ? AND c.status IN ('inspected', 'contact_found')
+       ORDER BY c.segment, c.domain`,
+    )
+    .all(market) as CompanyReportRow[];
+
+  const companies = rows.map((c): CompanyReport => {
+    const caps = c.capabilities_json ? (JSON.parse(c.capabilities_json) as Capabilities) : null;
+    return {
+      ...c,
+      observations: db
         .prepare(
-          `SELECT email FROM contacts WHERE company_id = ? AND mx_ok = 1
-           ORDER BY CASE role_hint WHEN 'sales' THEN 0 WHEN 'enquiries' THEN 1 WHEN 'info' THEN 2 WHEN 'named' THEN 3 ELSE 4 END`,
+          `SELECT code, status, description, evidence_url, evidence_detail, screenshot_path FROM observations
+           WHERE company_id = ? AND inspection_id IS ?
+           ORDER BY CASE status WHEN 'verified' THEN 0 WHEN 'likely' THEN 1 ELSE 2 END, code`,
         )
-        .all(c.id) as { email: string }[]
-    ).map((r) => r.email),
-  }));
+        .all(c.id, c.last_inspection_id) as ObservationRow[],
+      risks: db
+        .prepare(
+          `SELECT k.email, k.is_freemail, r.risk, r.reason, r.recipient_type FROM outreach_risk r
+           LEFT JOIN contacts k ON k.id = r.contact_id
+           WHERE r.company_id = ? AND r.inspection_id IS ? ORDER BY ${RISK_ORDER}`,
+        )
+        .all(c.id, c.last_inspection_id) as RiskRow[],
+      capabilities: caps ? Object.entries(caps.flags).filter(([, v]) => v.present).map(([k]) => k) : [],
+    };
+  });
 
   const funnel = db
     .prepare('SELECT status, COUNT(*) AS count FROM companies WHERE market = ? GROUP BY status ORDER BY count DESC')
@@ -70,7 +100,7 @@ export function buildCandidatesReport(db: Db, market: MarketCode): CandidatesRep
     )
     .all(market) as { reason: string; count: number }[];
 
-  return { candidates, funnel, rejectReasons };
+  return { companies, funnel, rejectReasons };
 }
 
 function csvCell(v: string | null | undefined): string {
@@ -79,8 +109,11 @@ function csvCell(v: string | null | undefined): string {
 }
 
 export function toCsv(report: CandidatesReport): string {
-  const header = ['domain', 'name', 'city', 'segment', 'platform', 'entity', 'contact', 'verified', 'likely', 'website'];
-  const rows = report.candidates.map((c) =>
+  const header = [
+    'domain', 'name', 'city', 'segment', 'platform', 'entity', 'best_contact', 'outreach_risk',
+    'verified', 'likely', 'capabilities', 'website',
+  ];
+  const rows = report.companies.map((c) =>
     [
       c.domain,
       c.name,
@@ -88,9 +121,11 @@ export function toCsv(report: CandidatesReport): string {
       c.segment,
       c.platform,
       c.entity_type,
-      c.contacts[0] ?? '',
+      c.risks[0]?.email ?? '',
+      c.risks[0]?.risk ?? '',
       c.observations.filter((o) => o.status === 'verified').map((o) => o.code).join(' '),
       c.observations.filter((o) => o.status === 'likely').map((o) => o.code).join(' '),
+      c.capabilities.join(' '),
       c.website_url,
     ]
       .map(csvCell)
@@ -99,11 +134,17 @@ export function toCsv(report: CandidatesReport): string {
   return [header.join(','), ...rows].join('\n') + '\n';
 }
 
+const RISK_LABEL: Record<string, string> = { low: '🟢 low', review_required: '🟡 review_required', high: '🔴 high' };
+
 export function toMarkdown(report: CandidatesReport, market: MarketCode, generatedAt = new Date()): string {
+  const withFindings = report.companies.filter((c) => c.observations.some((o) => o.status === 'verified')).length;
   const lines: string[] = [
-    `# Кандидаты — ${market}`,
+    `# Проверенные компании — ${market}`,
     '',
-    `Сформировано: ${generatedAt.toISOString().slice(0, 16).replace('T', ' ')} UTC · кандидатов: **${report.candidates.length}**`,
+    `Сформировано: ${generatedAt.toISOString().slice(0, 16).replace('T', ' ')} UTC · компаний: **${report.companies.length}**` +
+      ` · с проверенными техническими находками: **${withFindings}**`,
+    '',
+    'Риск контакта — отдельная информация о законности холодного письма; на отбор компаний он не влияет.',
     '',
     '## Воронка',
     '',
@@ -116,15 +157,23 @@ export function toMarkdown(report: CandidatesReport, market: MarketCode, generat
     lines.push('## Причины автоотказа', '', '| Причина | Компаний |', '|---|---|');
     lines.push(...report.rejectReasons.map((r) => `| ${r.reason} | ${r.count} |`), '');
   }
-  lines.push('## Кандидаты', '');
-  for (const c of report.candidates) {
+  lines.push('## Компании', '');
+  for (const c of report.companies) {
     lines.push(`### ${c.name ?? c.domain} — ${c.domain}`, '');
     lines.push(
       `${c.segment ?? '?'} · ${c.city ?? '—'} · платформа: ${c.platform ?? '?'} · юрлицо: ${c.entity_type ?? '?'}` +
-        (c.registry_id ? ` (№ ${c.registry_id})` : ''),
+        (c.registry_id ? ` (№ ${c.registry_id})` : '') +
+        ` · сайт: ${c.website_url ?? '—'}`,
     );
     if (c.entity_evidence) lines.push(`Признак юрлица: ${c.entity_evidence}`);
-    lines.push(`Контакт: ${c.contacts.join(', ') || '—'} · сайт: ${c.website_url ?? '—'}`, '');
+    lines.push(`Уже есть на сайте: ${c.capabilities.join(', ') || '—'}`);
+    if (c.risks.length === 0) {
+      lines.push('Контакт: — (компания проверена до миграции 002)');
+    }
+    for (const r of c.risks) {
+      lines.push(`Контакт: ${r.email ?? '—'}${r.is_freemail ? ' (публичная почта)' : ''} · риск: ${RISK_LABEL[r.risk] ?? r.risk} — ${r.reason}`);
+    }
+    lines.push('');
     for (const o of c.observations) {
       const mark = o.status === 'verified' ? '✅' : o.status === 'likely' ? '❔' : '·';
       lines.push(`- ${mark} **${o.code}** — ${o.description}${o.evidence_url ? ` ([страница](${o.evidence_url}))` : ''}`);
@@ -136,13 +185,17 @@ export function toMarkdown(report: CandidatesReport, market: MarketCode, generat
   return lines.join('\n');
 }
 
-export function writeCandidatesReport(db: Db, market: MarketCode, dataDir: string): { md: string; csv: string; report: CandidatesReport } {
+export function writeCandidatesReport(
+  db: Db,
+  market: MarketCode,
+  dataDir: string,
+): { md: string; csv: string; report: CandidatesReport } {
   const report = buildCandidatesReport(db, market);
   const dir = path.resolve(dataDir, 'reports');
   mkdirSync(dir, { recursive: true });
   const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
-  const md = path.join(dir, `candidates-${market}-${stamp}.md`);
-  const csv = path.join(dir, `candidates-${market}-${stamp}.csv`);
+  const md = path.join(dir, `companies-${market}-${stamp}.md`);
+  const csv = path.join(dir, `companies-${market}-${stamp}.csv`);
   writeFileSync(md, toMarkdown(report, market));
   writeFileSync(csv, toCsv(report));
   return { md, csv, report };

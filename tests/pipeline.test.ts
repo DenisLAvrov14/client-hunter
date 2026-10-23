@@ -53,7 +53,10 @@ function setup(site: ConstructorParameters<typeof FakeFetcher>[0], suppressed = 
     robotsToken: 'ClientHunterBot',
     maxPages: 3,
     maxNavLinks: 2,
+    mainTextMaxChars: 4000,
+    linksMax: 40,
     screenshotRoot: 'unused',
+    mode: 'discover',
   };
   return { db, company, fetcher, deps };
 }
@@ -66,17 +69,43 @@ const fullSite = {
 };
 
 describe('processCompany', () => {
-  it('runs a B2B site end to end and stores observations and contacts', async () => {
+  it('runs a B2B site end to end: observations, clean text, capabilities, contacts, outreach risk', async () => {
     const { db, company, deps } = setup(fullSite);
     const r = await processCompany(company, deps);
-    expect(r.status).toBe('contact_found');
+    expect(r.status).toBe('inspected');
     expect(r.entity).toBe('ltd');
     expect(r.verified).toEqual(expect.arrayContaining(['PDF_CATALOG', 'NO_QUOTE_FORM', 'NO_VIEWPORT_META']));
-    expect(r.contact).toBe('sales@northbridge-example.co.uk');
+    expect(r).toMatchObject({ contact: 'sales@northbridge-example.co.uk', risk: 'low' });
 
-    const row = db.prepare('SELECT status, registry_id, platform FROM companies WHERE id = ?').get(company.id);
-    expect(row).toEqual({ status: 'contact_found', registry_id: '01234567', platform: 'custom' });
-    expect((db.prepare('SELECT COUNT(*) AS n FROM pages').get() as { n: number }).n).toBeGreaterThanOrEqual(2);
+    const row = db.prepare('SELECT status, registry_id, platform, last_inspection_id FROM companies WHERE id = ?').get(company.id) as {
+      last_inspection_id: string;
+    };
+    expect(row).toMatchObject({ status: 'inspected', registry_id: '01234567', platform: 'custom' });
+
+    const inspection = db.prepare('SELECT * FROM inspections WHERE id = ?').get(row.last_inspection_id) as {
+      result_status: string;
+      capabilities_json: string;
+    };
+    expect(inspection.result_status).toBe('inspected');
+    expect(JSON.parse(inspection.capabilities_json).flags.price_on_request.present).toBe(true);
+
+    const pages = db.prepare('SELECT url, main_text, links_json FROM pages WHERE inspection_id = ?').all(row.last_inspection_id) as {
+      url: string;
+      main_text: string;
+    }[];
+    // /about is disallowed by robots.txt, so its slot goes to the next page (contact).
+    expect(pages.map((p) => p.url)).toEqual([`${ORIGIN}/`, `${ORIGIN}/products`, `${ORIGIN}/contact-us`]);
+    expect(pages[0]!.main_text).toContain('Steel sections, fasteners and fixings');
+    expect(pages[0]!.main_text).not.toContain('Registered in England');
+
+    const risks = db
+      .prepare('SELECT k.email, r.risk FROM outreach_risk r JOIN contacts k ON k.id = r.contact_id ORDER BY k.email')
+      .all();
+    expect(risks).toEqual([
+      { email: 'info@northbridge-example.co.uk', risk: 'low' },
+      { email: 'john.smith@gmail.com', risk: 'review_required' },
+      { email: 'sales@northbridge-example.co.uk', risk: 'low' },
+    ]);
   });
 
   it('never fetches paths disallowed by robots.txt', async () => {
@@ -97,9 +126,9 @@ describe('processCompany', () => {
 
   it('respects the per-site page budget (max_pages_per_site)', async () => {
     const { company, fetcher, deps } = setup(fullSite);
-    await processCompany(company, { ...deps, maxPages: 1 });
+    await processCompany(company, { ...deps, maxPages: 2 });
     const pageGets = fetcher.requests.filter((r) => r.startsWith('GET') && !r.endsWith('robots.txt') && !r.includes('/old-page'));
-    expect(pageGets).toEqual([`GET ${ORIGIN}/`]);
+    expect(pageGets).toEqual([`GET ${ORIGIN}/`, `GET ${ORIGIN}/products`]);
   });
 
   it('skips suppressed domains without any request', async () => {
@@ -121,12 +150,43 @@ describe('processCompany', () => {
     expect(db.prepare("SELECT 1 FROM observations WHERE code = 'SSL_ERROR'").get()).toBeTruthy();
   });
 
-  it('rejects companies without a detectable legal entity', async () => {
+  it('keeps companies without a legal entity, technical problems or email (only the risk differs)', async () => {
+    const { db, company, deps } = setup({
+      [`${ORIGIN}/robots.txt`]: [404, html, ''],
+      [`${ORIGIN}/`]: [
+        200,
+        html,
+        '<html><head><meta name="viewport" content="width=device-width"></head><body><p>Wedding photography. Call 0161 000 000.</p></body></html>',
+      ],
+    });
+    const r = await processCompany(company, deps);
+    expect(r).toMatchObject({ status: 'inspected', entity: 'unknown', verified: [], contact: null, risk: 'review_required' });
+    expect(db.prepare('SELECT contact_id, risk FROM outreach_risk').all()).toEqual([{ contact_id: null, risk: 'review_required' }]);
+  });
+
+  it('keeps sole traders, marking cold email as high risk', async () => {
     const { company, deps } = setup({
       [`${ORIGIN}/robots.txt`]: [404, html, ''],
-      [`${ORIGIN}/`]: [200, html, '<p>Welcome to our shop. Email <a href="mailto:info@northbridge-example.co.uk">us</a>.</p>'],
+      [`${ORIGIN}/`]: [200, html, '<p>Jo Bloggs Photography is a sole trader. <a href="mailto:jo@northbridge-example.co.uk">Email</a></p>'],
     });
-    expect(await processCompany(company, deps)).toMatchObject({ status: 'rejected_auto', reason: 'entity_unknown' });
+    expect(await processCompany(company, deps)).toMatchObject({ status: 'inspected', entity: 'sole_trader', risk: 'high' });
+  });
+
+  it('re-inspection adds a new inspection and keeps the earlier pages and observations', async () => {
+    const { db, company, deps } = setup(fullSite);
+    await processCompany(company, deps);
+    const fresh = db.prepare('SELECT * FROM companies WHERE id = ?').get(company.id) as CompanyRow;
+    await processCompany(fresh, { ...deps, mode: 'reinspect' });
+    expect(db.prepare('SELECT mode FROM inspections ORDER BY started_at, mode').all()).toEqual([
+      { mode: 'discover' },
+      { mode: 'reinspect' },
+    ]);
+    const perInspection = db
+      .prepare('SELECT COUNT(DISTINCT inspection_id) AS n FROM observations WHERE code = ?')
+      .get('PDF_CATALOG') as { n: number };
+    expect(perInspection.n).toBe(2);
+    // Contacts are refreshed, not duplicated.
+    expect((db.prepare('SELECT COUNT(*) AS n FROM contacts').get() as { n: number }).n).toBe(3);
   });
 });
 

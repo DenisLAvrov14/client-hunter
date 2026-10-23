@@ -2,7 +2,9 @@
 
 Находит традиционные бизнесы с конкретной проверяемой проблемой на сайте, готовит досье и персональное письмо. Оператор одобряет письма в Telegram. Полная спецификация: [docs/spec.md](docs/spec.md).
 
-**Текущая фаза: 1 — поиск и проверка сайтов, без LLM.** Писем нет никаких: результат печатается в консоль и сохраняется в `data/reports/`. Отправка выключена (`SENDING_ENABLED=false`, `DRY_RUN=true`).
+**Текущая фаза: поиск возможностей, этап 1 — данные и снятие фильтров (без LLM).** Писем нет никаких: результат печатается в консоль и сохраняется в `data/reports/`. Отправка выключена (`SENDING_ENABLED=false`, `DRY_RUN=true`).
+
+Что изменилось относительно спецификации — [docs/decisions.md](docs/decisions.md): юрлицо больше не фильтр, риск контакта хранится отдельно и на отбор не влияет, собирается и публичная почта (gmail и т. п.).
 
 ## Требования
 - Node.js **24 LTS**
@@ -38,6 +40,8 @@ npm run pipeline -- --market UK --segment S2 --limit 10
 |---|---|
 | `npm run pipeline -- --market UK --segment S2 --limit 10` | поиск + проверка + отчёт |
 | `npm run report:candidates -- --market UK` | пересобрать отчёт из базы |
+| `npm run reinspect -- --dry-run` | сколько компаний, отсеянных по старым правилам, будет перепроверено |
+| `npm run reinspect -- --market UK --limit 50` | перепроверить их по новым правилам (без браузера; `--browser` — с мобильными проверками) |
 | `npm run import-csv -- --file list.csv --market UK --segment S2` | добавить свои домены (CSV: `website,name,city` или по домену в строке) |
 | `npm run migrate` | применить `migrations/*.sql` |
 | `npm run check-config` | проверить `config/` и флаги из `.env` |
@@ -56,10 +60,9 @@ npm run pipeline -- --market UK --segment S2 --limit 10
 | `redirects_offsite` | сайт перенаправляет на другой домен |
 | `parked_domain` | домен припаркован / продаётся |
 | `not_shopify`, `store_closed`, `too_few_products` | для S1 |
-| `entity_unknown`, `entity_sole_trader` | не видно юрлица / ИП — по закону не пишем |
-| `no_contact`, `no_mx` | нет подходящего адреса на домене компании |
-| `no_verified_observation` | нет ни одной проверенной проблемы |
 | `suppressed` | домен в suppression list |
+
+Больше **не** отсеивают (с 2026-10-23): неизвестное юрлицо, ИП, отсутствие email, отсутствие технических проблем. Это записывается в базу, а законность холодного письма — отдельное поле «риск контакта» (`low` / `review_required` / `high`) рядом с компанией в отчёте.
 
 ## Конфиги
 | Файл | Что внутри |

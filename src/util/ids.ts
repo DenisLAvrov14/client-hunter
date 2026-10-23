@@ -19,6 +19,8 @@ export const ID_PREFIXES = {
   llmCall: 'llm',
   run: 'run',
   event: 'evt',
+  inspection: 'ins',
+  outreachRisk: 'ork',
 } as const;
 
 export type IdKind = keyof typeof ID_PREFIXES;

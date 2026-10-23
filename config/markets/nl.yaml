@@ -19,3 +19,4 @@ entity_markers_allow: ["B.V.", "BV", "N.V.", "NV"]
 entity_markers_deny: ["eenmanszaak", "VOF", "V.O.F."]
 registry: none
 discovery_cities: [Amsterdam, Rotterdam, Eindhoven]
+cold_email_baseline: allowed_for_companies   # outreach risk only; see src/outreach/risk.ts

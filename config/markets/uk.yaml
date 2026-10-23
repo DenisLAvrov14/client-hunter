@@ -19,3 +19,4 @@ entity_markers_allow: ["Ltd", "Limited", "PLC", "LLP"]
 entity_markers_deny: ["sole trader"]
 registry: companies_house
 discovery_cities: ["Greater London", Manchester, Liverpool]   # S2 discovery via OSM; S1 is not city-bound
+cold_email_baseline: allowed_for_companies   # outreach risk only; see src/outreach/risk.ts

@@ -19,3 +19,4 @@ entity_markers_allow: ["Limited", "Ltd", "DAC", "Teoranta", "Teo"]
 entity_markers_deny: ["sole trader"]
 registry: none
 discovery_cities: [Dublin, Cork, Galway]
+cold_email_baseline: allowed_for_companies   # outreach risk only; see src/outreach/risk.ts
