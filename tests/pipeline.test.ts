@@ -2,11 +2,12 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadConfig } from '../src/config/load.js';
-import { openDb } from '../src/db/connection.js';
+import { openDb, type Db } from '../src/db/connection.js';
 import { migrate } from '../src/db/migrate.js';
 import { upsertDiscovered, type CompanyRow } from '../src/db/repo.js';
 import { DomainThrottle, FetchError, type Fetcher, type FetchOptions, type FetchResult } from '../src/inspect/fetcher.js';
 import { confirmBrokenImages } from '../src/inspect/links.js';
+import { MAX_BROWSER_LAUNCH_ATTEMPTS, PlaywrightInspector } from '../src/inspect/mobile.js';
 import { processCompany, type ProcessDeps } from '../src/pipeline/processCompany.js';
 
 const config = loadConfig();
@@ -182,7 +183,7 @@ describe('processCompany', () => {
     const renderer = {
       renderHtml: async (url: string) => {
         rendered.push(url);
-        return '<html><body><h1>Tattoo studio in Amsterdam</h1><p>Walk-ins welcome. Mail us at info@northbridge-example.co.uk</p></body></html>';
+        return { html: '<html><body><h1>Tattoo studio in Amsterdam</h1><p>Walk-ins welcome. Mail us at info@northbridge-example.co.uk</p></body></html>' };
       },
       close: async () => {},
     };
@@ -204,8 +205,82 @@ describe('processCompany', () => {
       [`${ORIGIN}/`]: [200, html, `<html><body>${text}</body></html>`],
     });
     let calls = 0;
-    await processCompany(company, { ...deps, renderer: { renderHtml: async () => (calls++, null), close: async () => {} } });
+    await processCompany(company, { ...deps, renderer: { renderHtml: async () => (calls++, { error: 'unused' }), close: async () => {} } });
     expect(calls).toBe(0);
+  });
+
+  describe('browser failures', () => {
+    const thinSite = {
+      [`${ORIGIN}/robots.txt`]: [404, html, ''] as [number, string, string],
+      [`${ORIGIN}/`]: [200, html, '<html><body><div id="root"></div><a href="mailto:info@northbridge-example.co.uk">mail</a></body></html>'] as [number, string, string],
+    };
+    const events = (db: Db) => db.prepare('SELECT type, data_json FROM events WHERE type LIKE ?').all('browser_%') as { type: string; data_json: string }[];
+
+    it('a failed render keeps the server HTML, records the reason and still inspects the company', async () => {
+      const { db, company, deps } = setup(thinSite);
+      const renderer = { renderHtml: async () => ({ error: 'Chromium failed to launch: executable not found' }), close: async () => {} };
+      const r = await processCompany(company, { ...deps, renderer });
+      expect(r).toMatchObject({ status: 'inspected', contact: 'info@northbridge-example.co.uk' });
+      expect(r.verified).toContain('NO_VIEWPORT_META');
+      expect(r.browserIssues).toEqual(['render: Chromium failed to launch: executable not found']);
+      expect(events(db)).toEqual([{ type: 'browser_render_failed', data_json: expect.stringContaining('executable not found') }]);
+    });
+
+    it('a renderer that throws is treated the same way', async () => {
+      const { company, deps } = setup(thinSite);
+      const renderer = { renderHtml: async (): Promise<never> => { throw new Error('boom'); }, close: async () => {} };
+      const r = await processCompany(company, { ...deps, renderer });
+      expect(r.status).toBe('inspected');
+      expect(r.browserIssues[0]).toContain('boom');
+    });
+
+    it('mobile checks that could not run are reported as incomplete, never as passed', async () => {
+      const { db, company, deps } = setup(fullSite);
+      const mobile = {
+        inspect: async () => ({ observations: [], failures: [`${ORIGIN}/: Chromium unavailable after 2 launch attempts`] }),
+        close: async () => {},
+      };
+      const r = await processCompany(company, { ...deps, mobile });
+      expect(r).toMatchObject({ status: 'inspected', browserChecks: 'incomplete' });
+      expect(r.verified).toEqual(expect.arrayContaining(['PDF_CATALOG', 'NO_VIEWPORT_META']));
+      expect(events(db).map((e) => e.type)).toEqual(['browser_checks_incomplete']);
+    });
+
+    it('mobile checks that ran are "done"; without a mobile inspector they are "not_requested"', async () => {
+      const ok = setup(fullSite);
+      const mobile = { inspect: async () => ({ observations: [], failures: [] }), close: async () => {} };
+      expect((await processCompany(ok.company, { ...ok.deps, mobile })).browserChecks).toBe('done');
+      const none = setup(fullSite);
+      expect((await processCompany(none.company, none.deps)).browserChecks).toBe('not_requested');
+    });
+
+    it('after the launch limit, every later company needing the browser gets "incomplete" without new launches', async () => {
+      let launches = 0;
+      const inspector = new PlaywrightInspector('TestBot/1', 1000, () => {
+        launches++;
+        return Promise.reject(new Error('Executable does not exist'));
+      });
+      const outcomes: string[] = [];
+      for (let i = 0; i < MAX_BROWSER_LAUNCH_ATTEMPTS + 2; i++) {
+        const { company, deps } = setup(fullSite);
+        const r = await processCompany(company, { ...deps, mobile: inspector, renderer: inspector });
+        expect(r.status).toBe('inspected');
+        outcomes.push(r.browserChecks);
+      }
+      expect(outcomes).toEqual(Array(MAX_BROWSER_LAUNCH_ATTEMPTS + 2).fill('incomplete'));
+      expect(launches).toBe(MAX_BROWSER_LAUNCH_ATTEMPTS);
+    });
+
+    it('an unreachable site is rejected before any browser work, not turned into a pass', async () => {
+      const { company, deps } = setup({});
+      let used = false;
+      const renderer = { renderHtml: async () => ((used = true), { html: '<p>x</p>' }), close: async () => {} };
+      const mobile = { inspect: async () => ((used = true), { observations: [], failures: [] }), close: async () => {} };
+      const r = await processCompany(company, { ...deps, renderer, mobile });
+      expect(r.status).toBe('rejected_auto');
+      expect(r.browserChecks).toBe('not_requested');
+      expect(used).toBe(false);
+    });
   });
 
   it('re-inspection adds a new inspection and keeps the earlier pages and observations', async () => {

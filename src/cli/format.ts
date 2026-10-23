@@ -4,7 +4,8 @@ import type { ProcessResult } from '../pipeline/processCompany.js';
 export function describeResult(r: ProcessResult): string {
   if (r.status === 'inspected') {
     const findings = r.verified.length ? `находки: ${r.verified.join(', ')}` : 'без проверенных находок';
-    return `✔ ${findings} · ${r.contact ?? 'нет email'} · риск контакта: ${r.risk ?? '—'}`;
+    const browser = r.browserIssues.length ? ` · ⚠ браузер: ${r.browserIssues[0]}` : '';
+    return `✔ ${findings} · ${r.contact ?? 'нет email'} · риск контакта: ${r.risk ?? '—'}${browser}`;
   }
   if (r.status === 'rejected_auto') return `✖ ${r.reason}`;
   return `⚠ ошибка: ${r.reason}`;

@@ -9,6 +9,7 @@ import {
   insertOutreachRisk,
   insertPage,
   isSuppressed,
+  logEvent,
   setStatus,
   startInspection,
   updateCompany,
@@ -59,6 +60,10 @@ export interface ProcessResult {
   contact: string | null;
   /** Outreach risk of the best contact; informational, never part of qualification. */
   risk: OutreachRisk | null;
+  /** Mobile checks in Chromium: 'incomplete' means some pages were NOT checked (not "no problems"). */
+  browserChecks: 'not_requested' | 'done' | 'incomplete';
+  /** Browser failures (launch, rendering, mobile checks); also logged to events. */
+  browserIssues: string[];
 }
 
 /** Below this many characters of main text on all pages, the home page is rendered with JavaScript. */
@@ -102,6 +107,8 @@ export async function processCompany(company: CompanyRow, deps: ProcessDeps): Pr
     likely: [],
     contact: null,
     risk: null,
+    browserChecks: 'not_requested',
+    browserIssues: [],
   };
   const inspectionId = startInspection(db, company.id, deps.mode);
   updateCompany(db, company.id, { last_inspection_id: inspectionId });
@@ -187,10 +194,14 @@ export async function processCompany(company: CompanyRow, deps: ProcessDeps): Pr
     let textPages = pages;
     let mainTexts = extractMainTexts(textPages, deps.mainTextMaxChars);
     if (deps.renderer && mainTexts.join('').length < THIN_TEXT_CHARS) {
-      const rendered = await deps.renderer.renderHtml(home.url);
-      if (rendered) {
-        textPages = [buildPageContext(home.url, 'home', home.status, rendered), ...pages.slice(1)];
+      // A browser failure keeps the server HTML; it never fails the company.
+      const rendered = await deps.renderer.renderHtml(home.url).catch((err: unknown) => ({ error: String(err) }));
+      if ('html' in rendered) {
+        textPages = [buildPageContext(home.url, 'home', home.status, rendered.html), ...pages.slice(1)];
         mainTexts = extractMainTexts(textPages, deps.mainTextMaxChars);
+      } else {
+        result.browserIssues.push(`render: ${rendered.error}`);
+        logEvent(db, company.id, 'browser_render_failed', { url: home.url, error: rendered.error });
       }
     }
     textPages.forEach((page, i) =>
@@ -228,7 +239,15 @@ export async function processCompany(company: CompanyRow, deps: ProcessDeps): Pr
     if (deps.mobile) {
       const targets: MobileTarget[] = [{ url: home.url, kind: 'home' }];
       for (const p of pages) if ((p.kind === 'contact' || p.kind === 'workflow') && hasInquiryForm(p)) targets.push({ url: p.url, kind: 'form' });
-      for (const o of await deps.mobile.inspect(targets, path.join(deps.screenshotRoot, company.id))) {
+      const mobileRun = await deps.mobile
+        .inspect(targets, path.join(deps.screenshotRoot, company.id))
+        .catch((err: unknown) => ({ observations: [], failures: targets.map((t) => `${t.url}: ${String(err)}`) }));
+      result.browserChecks = mobileRun.failures.length ? 'incomplete' : 'done';
+      if (mobileRun.failures.length) {
+        result.browserIssues.push(...mobileRun.failures.map((f) => `mobile: ${f}`));
+        logEvent(db, company.id, 'browser_checks_incomplete', { failures: mobileRun.failures });
+      }
+      for (const o of mobileRun.observations) {
         if (o.code !== 'BROKEN_IMAGES') {
           observations.push(o);
           continue;

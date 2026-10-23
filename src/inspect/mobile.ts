@@ -8,32 +8,70 @@ export interface MobileTarget {
   kind: 'home' | 'form';
 }
 
+/** `failures` lists targets the browser could not check — they are NOT "checked, nothing found". */
+export interface MobileResult {
+  observations: ObservationDraft[];
+  failures: string[];
+}
+
 export interface MobileInspector {
-  inspect(targets: MobileTarget[], screenshotDir: string): Promise<ObservationDraft[]>;
+  inspect(targets: MobileTarget[], screenshotDir: string): Promise<MobileResult>;
   close(): Promise<void>;
 }
+
+export type RenderResult = { html: string } | { error: string };
 
 /** Renders a page with JavaScript, for sites whose server HTML has almost no text. */
 export interface PageRenderer {
-  renderHtml(url: string): Promise<string | null>;
+  renderHtml(url: string): Promise<RenderResult>;
   close(): Promise<void>;
 }
 
+/** Chromium launch attempts per run; after that the browser is reported unavailable without retrying. */
+export const MAX_BROWSER_LAUNCH_ATTEMPTS = 2;
+
+export class BrowserUnavailableError extends Error {}
+
 const VIEWPORT = { width: 390, height: 844 };
+
+const firstLine = (err: unknown) => String((err as Error)?.message ?? err).split('\n')[0]!.slice(0, 200);
 
 /** Playwright-based checks (spec 8.1 step 5): one browser, a fresh context per site, never submits anything. */
 export class PlaywrightInspector implements MobileInspector, PageRenderer {
   // The launch promise, not the browser, is cached so concurrent sites share one Chromium.
   private browser: Promise<Browser> | null = null;
+  private launchFailures = 0;
+  private lastLaunchError = '';
 
   constructor(
     private readonly userAgent: string,
     private readonly timeoutMs: number,
+    private readonly launch: () => Promise<Browser> = () => chromium.launch({ headless: true }),
   ) {}
 
+  /** A failed launch is forgotten so a later call can retry, up to MAX_BROWSER_LAUNCH_ATTEMPTS per run. */
   private async context(): Promise<BrowserContext> {
-    this.browser ??= chromium.launch({ headless: true });
-    return (await this.browser).newContext({
+    if (!this.browser) {
+      if (this.launchFailures >= MAX_BROWSER_LAUNCH_ATTEMPTS) {
+        throw new BrowserUnavailableError(
+          `Chromium unavailable after ${this.launchFailures} launch attempts: ${this.lastLaunchError}`,
+        );
+      }
+      const launching = this.launch();
+      this.browser = launching;
+      launching.catch((err) => {
+        if (this.browser === launching) this.browser = null;
+        this.launchFailures++;
+        this.lastLaunchError = firstLine(err);
+      });
+    }
+    let browser: Browser;
+    try {
+      browser = await this.browser;
+    } catch (err) {
+      throw new BrowserUnavailableError(`Chromium failed to launch: ${firstLine(err)}`);
+    }
+    return browser.newContext({
       viewport: VIEWPORT,
       isMobile: true,
       hasTouch: true,
@@ -45,15 +83,22 @@ export class PlaywrightInspector implements MobileInspector, PageRenderer {
     });
   }
 
-  async inspect(targets: MobileTarget[], screenshotDir: string): Promise<ObservationDraft[]> {
-    const ctx = await this.context();
+  async inspect(targets: MobileTarget[], screenshotDir: string): Promise<MobileResult> {
+    let ctx: BrowserContext;
+    try {
+      ctx = await this.context();
+    } catch (err) {
+      return { observations: [], failures: targets.map((t) => `${t.url}: ${firstLine(err)}`) };
+    }
     const found: ObservationDraft[] = [];
+    const failures: string[] = [];
     try {
       for (const target of targets) {
-        const page = await ctx.newPage();
+        let page: Awaited<ReturnType<BrowserContext['newPage']>> | null = null;
         const jsErrors: string[] = [];
-        page.on('pageerror', (err) => jsErrors.push(err.message.slice(0, 200)));
         try {
+          page = await ctx.newPage();
+          page.on('pageerror', (err) => jsErrors.push(err.message.slice(0, 200)));
           await page.goto(target.url, { waitUntil: 'load', timeout: this.timeoutMs });
           await page.waitForTimeout(1500);
 
@@ -150,36 +195,47 @@ export class PlaywrightInspector implements MobileInspector, PageRenderer {
               screenshotPath: shot,
             });
           }
-        } catch {
-          // Browser failures on one page are not observations; the HTML checks still stand.
+        } catch (err) {
+          // Not an observation and not a pass: the page was not checked. HTML checks still stand.
+          failures.push(`${target.url}: ${firstLine(err)}`);
         } finally {
-          await page.close();
+          await page?.close().catch(() => {});
         }
       }
     } finally {
-      await ctx.close();
+      await ctx.close().catch(() => {});
     }
-    return found;
+    return { observations: found, failures };
   }
 
-  /** Page HTML after JavaScript has run; null on any browser failure. Never submits or clicks anything. */
-  async renderHtml(url: string): Promise<string | null> {
-    const ctx = await this.context();
+  /** Page HTML after JavaScript has run, or the reason it could not be rendered. Never submits or clicks anything. */
+  async renderHtml(url: string): Promise<RenderResult> {
+    let ctx: BrowserContext;
+    try {
+      ctx = await this.context();
+    } catch (err) {
+      return { error: firstLine(err) };
+    }
     try {
       const page = await ctx.newPage();
       await page.goto(url, { waitUntil: 'load', timeout: this.timeoutMs });
       await page.waitForTimeout(2000);
-      return await page.content();
-    } catch {
-      return null;
+      return { html: await page.content() };
+    } catch (err) {
+      return { error: `render failed: ${firstLine(err)}` };
     } finally {
-      await ctx.close();
+      await ctx.close().catch(() => {});
     }
   }
 
   async close(): Promise<void> {
     const browser = this.browser;
     this.browser = null;
-    if (browser) await (await browser).close();
+    if (!browser) return;
+    try {
+      await (await browser).close();
+    } catch {
+      // A browser that never launched has nothing to close.
+    }
   }
 }
