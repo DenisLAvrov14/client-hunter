@@ -120,7 +120,9 @@ describe('digest', () => {
     expect(d.text).toContain(`${obsId} · verified · NO_VIEWPORT_META`);
     expect(d.text).toContain('Public email contacts: 2 (own-domain role addresses: 1, public mailboxes: 1)');
     expect(d.text).not.toMatch(/@/);
-    expect(d.text).toContain('- prices only on request: yes');
+    // Machine key first (what deep-analysis evidence must cite), then the human label.
+    expect(d.text).toContain('- price_on_request · prices only on request: yes');
+    expect(d.text).toContain('- online_booking · online booking: no');
     expect(d.injectionSuspected).toBe(false);
   });
 
@@ -154,6 +156,22 @@ describe('validateScreen', () => {
     expect(v.retry).toBe(false);
     expect(v.opportunities.map((o) => o.hookVerified)).toEqual([true, true]);
     expect(v.result.commercial_signals).toHaveLength(1);
+  });
+
+  it('a quote found on another page than cited is kept with its real page URL, never the wrong one', () => {
+    const a = goodAnswer(obsId);
+    a.commercial_signals[0] = { signal: 'мастерская в Лидсе', quote: 'Made to measure in our Leeds workshop', page_url: PRICES };
+    a.opportunities[0]!.hook_page_url = LEGAL; // the hook is really on PRICES
+    const v = validateScreen(a, digest);
+    expect(v.result.commercial_signals[0]!.page_url).toBe(HOME);
+    expect(v.result.opportunities[0]!.hook_page_url).toBe(PRICES);
+    expect(v.opportunities[0]!.hookVerified).toBe(true);
+    expect(v.issues.join('\n')).toContain(`is on ${HOME}, not on the cited ${PRICES}`);
+    expect(v.issues.join('\n')).toContain(`is on ${PRICES}, not on the cited ${LEGAL}`);
+    // A trailing-slash or #fragment difference is the same page, not a miscitation.
+    const same = goodAnswer(obsId);
+    same.commercial_signals[0]!.page_url = `${PRICES}/#top`;
+    expect(validateScreen(same, digest).issues.join('\n')).not.toContain('not on the cited');
   });
 
   it('matches quotes despite typographic differences', () => {

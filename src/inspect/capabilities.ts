@@ -16,6 +16,42 @@ export type CapabilityKey =
   | 'live_chat'
   | 'messenger_links';
 
+/** Human-readable label shown next to each key in the LLM input. */
+export const CAPABILITY_LABELS: Record<CapabilityKey, string> = {
+  cart_checkout: 'online shop / cart',
+  inquiry_form: 'enquiry or contact form',
+  online_booking: 'online booking',
+  calculator_configurator: 'calculator or configurator',
+  site_search: 'site search',
+  prices_visible: 'prices shown on the site',
+  price_on_request: 'prices only on request',
+  customer_login: 'customer login / account',
+  live_chat: 'live chat widget',
+  messenger_links: 'WhatsApp/Telegram/Viber links',
+};
+
+const KEY_BY_LABEL = new Map(Object.entries(CAPABILITY_LABELS).map(([k, label]) => [label.toLowerCase(), k as CapabilityKey]));
+
+/**
+ * The capability a model's evidence ref points to: the exact key, or the exact label shown in
+ * the input (models often cite what they read, e.g. "online shop / cart"), optionally followed by
+ * the shown value (": yes", " (woocommerce store)"). Anything else — invented keys such as
+ * "online_shop" — is null: unverifiable, never guessed.
+ */
+export function resolveCapabilityRef(ref: string): CapabilityKey | null {
+  const r = ref
+    .trim()
+    .toLowerCase()
+    .replace(/\s*\([^)]*\)\s*$/, '')
+    .replace(/\s*:\s*(yes|no)\b.*$/, '')
+    .trim();
+  if (r in CAPABILITY_LABELS) return r as CapabilityKey;
+  // "cart_checkout (online shop / cart)" — key with its label, as the input lists them.
+  const head = r.split(/\s+/)[0] ?? '';
+  if (head in CAPABILITY_LABELS) return head as CapabilityKey;
+  return KEY_BY_LABEL.get(r) ?? null;
+}
+
 export interface Capability {
   present: boolean;
   evidenceUrl?: string;
@@ -33,8 +69,9 @@ const BOOKING_WIDGETS =
 const BOOKING_TEXT =
   /book (now|online|an appointment|a table|a session)|online booking|schedule (a|an|your) (call|appointment|visit)|online (boeken|reserveren)|afspraak maken|записаться (онлайн|на приём|на прием)|онлайн[- ]запись|забронировать/i;
 const CALCULATOR = /calculator|configurator|build your own|price estimator|rekenmodule|калькулятор|конфигуратор|рассчитать стоимость/i;
-// Non-zero amounts only: an empty mini-cart ("£0.00") is not a price list.
-const PRICE_VISIBLE = /[£€$]\s?[1-9]|[1-9][\d\s.,]*\s?(€|eur\b|gbp\b|руб|₽|₸|тг\b|тенге)/i;
+// Non-zero amounts only: an empty mini-cart ("£0.00") is not a price list. The whole amount is
+// captured ("£204.00", not "£2"): the match is shown to the model as evidence.
+const PRICE_VISIBLE = /[£€$]\s?[1-9][\d,]*(?:\.\d{1,2})?|[1-9][\d\s.,]*\s?(€|eur\b|gbp\b|руб|₽|₸|тг\b|тенге)/i;
 const LOGIN = /\b(log ?in|sign in|my account|customer portal|client area|inloggen|mijn account)\b|личный кабинет|войти/i;
 // Matched on widget script hosts, not product words ("intercom" is also a door-entry product).
 const LIVE_CHAT =

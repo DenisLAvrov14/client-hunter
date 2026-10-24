@@ -8,6 +8,8 @@ import type { EntityType } from '../entity/detect.js';
 
 // .2: risk no longer depends on whether an email exists (contact availability is contact_status).
 export const RISK_RULES_VERSION = '2026-10-23.2';
+/** Under these rules a row without contact meant "no email found", not the recipient's risk. */
+export const LEGACY_NO_EMAIL_RULES_VERSION = '2026-10-23.1';
 
 /** Preliminary assessment only: 'low' is a low preliminary risk, never a legal permission to send. */
 export type OutreachRisk = 'low' | 'review_required' | 'high';

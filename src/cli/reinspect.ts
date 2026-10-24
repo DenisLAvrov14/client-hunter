@@ -5,7 +5,7 @@ import { loadConfig } from '../config/load.js';
 import { MARKET_CODES, MarketCode } from '../config/schema.js';
 import { openDb } from '../db/connection.js';
 import { migrate } from '../db/migrate.js';
-import { companiesForReinspection } from '../db/repo.js';
+import { companiesByDomain, companiesForReinspection } from '../db/repo.js';
 import { inspectCompanies } from '../pipeline/run.js';
 import { describeResult } from './format.js';
 
@@ -13,7 +13,7 @@ import { describeResult } from './format.js';
 // (unreachable, robots, 403, offsite redirects) are not re-inspected.
 const DEFAULT_REASONS = ['entity_unknown', 'entity_sole_trader', 'no_verified_observation', 'no_contact', 'no_mx'];
 
-const USAGE = `Usage: npm run reinspect -- [--market UK] [--limit 50] [--random] [--refresh] [--browser] [--dry-run]
+const USAGE = `Usage: npm run reinspect -- [--market UK] [--limit 50] [--random] [--refresh] [--domain a.co.uk ...] [--browser] [--dry-run]
 
 Re-inspects companies rejected under the old rules (${DEFAULT_REASONS.join(', ')}) and the
 old candidates, with the new extraction (clean text, capabilities, all public emails,
@@ -23,6 +23,8 @@ outreach risk). Earlier pages and observations are kept; each company is re-insp
   --limit     max companies (default: limits.max_companies_per_run)
   --random    random sample instead of alphabetical order
   --refresh   re-inspect companies already inspected under the new rules (after an extraction fix)
+  --domain    re-inspect exactly these companies (repeat for several; ignores --market/--limit),
+              e.g. a shortlist before stage C
   --browser   also run the Chromium mobile checks (slower; normally only for shortlisted companies)
   --dry-run   only count what would be re-inspected
 `;
@@ -33,6 +35,7 @@ const { values } = parseArgs({
     limit: { type: 'string' },
     random: { type: 'boolean' },
     refresh: { type: 'boolean' },
+    domain: { type: 'string', multiple: true },
     browser: { type: 'boolean' },
     'dry-run': { type: 'boolean' },
     help: { type: 'boolean', short: 'h' },
@@ -63,8 +66,20 @@ if (!Number.isInteger(limit) || limit < 1) {
 
 const db = openDb(path.resolve(config.app.db_file));
 migrate(db);
-const companies = companiesForReinspection(db, { markets, reasons: DEFAULT_REASONS, includeLegacyCandidates: true, limit, random: values.random ?? false, refresh: values.refresh ?? false });
-process.stdout.write(`К переинспекции: ${companies.length} (${markets.join(', ')})${values['dry-run'] ? ' — dry run' : ''}\n\n`);
+let companies;
+if (values.domain?.length) {
+  const { found, missing } = companiesByDomain(db, values.domain);
+  if (missing.length) {
+    process.stderr.write(`Нет в базе: ${missing.join(', ')}\n`);
+    db.close();
+    process.exit(2);
+  }
+  companies = found;
+} else {
+  companies = companiesForReinspection(db, { markets, reasons: DEFAULT_REASONS, includeLegacyCandidates: true, limit, random: values.random ?? false, refresh: values.refresh ?? false });
+}
+const scope = values.domain?.length ? 'по списку доменов' : markets.join(', ');
+process.stdout.write(`К переинспекции: ${companies.length} (${scope})${values['dry-run'] ? ' — dry run' : ''}\n\n`);
 if (values['dry-run'] || companies.length === 0) {
   db.close();
   process.exit(0);

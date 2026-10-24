@@ -2,7 +2,15 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { MarketCode } from '../config/schema.js';
 import type { Db } from '../db/connection.js';
-import { currentContactChannels, unconfirmedEmails, type ContactChannelRow } from '../db/repo.js';
+import {
+  currentContactChannels,
+  emailRisks,
+  protectedEmailPages,
+  recipientRisk,
+  unconfirmedEmails,
+  type ContactChannelRow,
+  type RiskRow,
+} from '../db/repo.js';
 import type { Capabilities } from '../inspect/capabilities.js';
 
 interface CompanyReportRow {
@@ -30,15 +38,6 @@ interface ObservationRow {
   screenshot_path: string | null;
 }
 
-interface RiskRow {
-  email: string | null;
-  is_freemail: number | null;
-  found_on_url: string | null;
-  risk: string;
-  reason: string;
-  recipient_type: string;
-}
-
 export interface CompanyReport extends CompanyReportRow {
   observations: ObservationRow[];
   /** Risk for the recipient as such (market + recipient type); null for inspections before rules 2026-10-23.2. */
@@ -49,6 +48,8 @@ export interface CompanyReport extends CompanyReportRow {
   channels: ContactChannelRow[];
   /** Emails from earlier inspections whose page was not re-checked by the latest successful one. */
   unconfirmedEmails: { email: string; found_on_url: string }[];
+  /** Pages hiding an email behind anti-harvesting protection (manual lookup only). */
+  protectedEmailPages: string[];
   capabilities: string[];
 }
 
@@ -57,10 +58,6 @@ export interface CandidatesReport {
   funnel: { status: string; count: number }[];
   rejectReasons: { reason: string; count: number }[];
 }
-
-const RISK_ORDER = "CASE r.risk WHEN 'low' THEN 0 WHEN 'review_required' THEN 1 ELSE 2 END";
-// Under rules 2026-10-23.1 a row without contact meant "no email found", not the recipient's risk.
-const LEGACY_NO_EMAIL_RULES = '2026-10-23.1';
 
 /**
  * Every usable inspected company of a market with the evidence of its latest inspection.
@@ -88,23 +85,11 @@ export function buildCandidatesReport(db: Db, market: MarketCode): CandidatesRep
            ORDER BY CASE status WHEN 'verified' THEN 0 WHEN 'likely' THEN 1 ELSE 2 END, code`,
         )
         .all(c.id, c.last_inspection_id) as ObservationRow[],
-      recipientRisk:
-        (db
-          .prepare(
-            `SELECT NULL AS email, NULL AS is_freemail, NULL AS found_on_url, r.risk, r.reason, r.recipient_type FROM outreach_risk r
-             WHERE r.company_id = ? AND r.inspection_id IS ? AND r.contact_id IS NULL AND r.rules_version != ?
-             ORDER BY r.created_at DESC LIMIT 1`,
-          )
-          .get(c.id, c.last_inspection_id, LEGACY_NO_EMAIL_RULES) as RiskRow | undefined) ?? null,
-      emailRisks: db
-        .prepare(
-          `SELECT k.email, k.is_freemail, k.found_on_url, r.risk, r.reason, r.recipient_type FROM outreach_risk r
-           JOIN contacts k ON k.id = r.contact_id
-           WHERE r.company_id = ? AND r.inspection_id IS ? ORDER BY ${RISK_ORDER}`,
-        )
-        .all(c.id, c.last_inspection_id) as RiskRow[],
+      recipientRisk: recipientRisk(db, c.id, c.last_inspection_id),
+      emailRisks: emailRisks(db, c.id, c.last_inspection_id),
       channels: currentContactChannels(db, c.id),
       unconfirmedEmails: unconfirmedEmails(db, c.id),
+      protectedEmailPages: protectedEmailPages(db, c.last_inspection_id),
       capabilities: caps ? Object.entries(caps.flags).filter(([, v]) => v.present).map(([k]) => k) : [],
     };
   });
@@ -132,7 +117,7 @@ function csvCell(v: string | null | undefined): string {
 
 export function toCsv(report: CandidatesReport): string {
   const header = [
-    'domain', 'name', 'city', 'segment', 'platform', 'entity', 'outreach_risk', 'contact_status',
+    'domain', 'name', 'city', 'segment', 'platform', 'entity', 'outreach_risk', 'contact_status', 'email_contact',
     'best_email', 'best_email_risk', 'other_channels', 'verified', 'likely', 'capabilities', 'website',
   ];
   const rows = report.companies.map((c) =>
@@ -145,6 +130,7 @@ export function toCsv(report: CandidatesReport): string {
       c.entity_type,
       c.recipientRisk?.risk ?? '',
       c.contact_status ?? '',
+      emailContactOf(c.emailRisks.length),
       c.emailRisks[0]?.email ?? '',
       c.emailRisks[0]?.risk ?? '',
       c.channels.map((ch) => `${ch.channel}:${ch.value}${ch.uncertain || !ch.confirmed ? '?' : ''}`).join(' '),
@@ -171,9 +157,51 @@ export function channelLine(ch: ContactChannelRow): string {
   return `${CHANNEL_LABEL[ch.channel] ?? ch.channel}: ${shown} — источник: ${ch.source_url}${marks.length ? ` · ${marks.join(' · ')}` : ''}`;
 }
 
+/**
+ * Email-first outreach: a company is reached by a public email (company domain or public mailbox),
+ * or it needs manual contact discovery. Separate from commercial potential and from outreach risk.
+ */
+export type EmailContact = 'available' | 'manual_discovery';
+
+export function emailContactOf(currentEmails: number): EmailContact {
+  return currentEmails > 0 ? 'available' : 'manual_discovery';
+}
+
+/** "**Email:** …" line for reports: the primary channel, or what to look at when searching manually. */
+export function emailContactLine(c: { currentEmails: number; unconfirmedEmails: number; protectedOn: string[]; hasForm: boolean }): string {
+  if (emailContactOf(c.currentEmails) === 'available') return `**Email:** есть — основной канал (адресов: ${c.currentEmails})`;
+  const hints = [
+    c.unconfirmedEmails ? 'есть адрес из прошлой проверки, его страница не перепроверялась — проверить вручную' : '',
+    c.protectedOn.length
+      ? `адрес на ${c.protectedOn.join(', ')} скрыт защитой от сбора — посмотреть вручную в браузере (код его не расшифровывает)`
+      : '',
+    c.hasForm ? 'запасной канал — форма на сайте (заполняет только человек)' : '',
+  ].filter(Boolean);
+  return `**Email:** не найден — нужен ручной поиск контакта${hints.length ? `: ${hints.join('; ')}` : ''}`;
+}
+
+const CONTACT_PAGE = /contact|kontakt|контакт|quote|offerte|zayavk|заявк/i;
+
+/**
+ * Report lines for a company's channels. A site-wide form (footer or header) is recorded once per
+ * page it appears on; confirmed forms are shown as ONE line — the contact-like page first, the other
+ * pages by path — instead of one line per page. Data stays as stored; this is presentation only.
+ */
+export function channelLines(channels: ContactChannelRow[]): string[] {
+  const forms = channels.filter((c) => c.channel === 'form' && c.confirmed);
+  const lines = channels.filter((c) => !forms.includes(c)).map(channelLine);
+  if (forms.length === 1) lines.unshift(channelLine(forms[0]!));
+  if (forms.length > 1) {
+    const main = forms.find((f) => CONTACT_PAGE.test(new URL(f.value).pathname)) ?? forms[0]!;
+    const others = forms.filter((f) => f !== main).map((f) => new URL(f.value).pathname);
+    lines.unshift(`форма: ${main.value} — форма обращения есть на ${forms.length} страницах сайта (также ${others.join(', ')})`);
+  }
+  return lines;
+}
+
 export const UNCONFIRMED_EMAIL_NOTE = '⚠ не подтверждён последней проверкой (страница-источник не загружалась)';
 
-const RISK_LABEL: Record<string, string> = { low: '🟢 low', review_required: '🟡 review_required', high: '🔴 high' };
+export const RISK_LABEL: Record<string, string> = { low: '🟢 low', review_required: '🟡 review_required', high: '🔴 high' };
 
 export function toMarkdown(report: CandidatesReport, market: MarketCode, generatedAt = new Date()): string {
   const withFindings = report.companies.filter((c) => c.observations.some((o) => o.status === 'verified')).length;
@@ -212,6 +240,14 @@ export function toMarkdown(report: CandidatesReport, market: MarketCode, generat
         : 'Риск обращения: не определён (проверка по старым правилам)',
     );
     lines.push(`Доступность контакта: ${c.contact_status ?? 'не определена (проверка до миграции 004)'}`);
+    lines.push(
+      emailContactLine({
+        currentEmails: c.emailRisks.length,
+        unconfirmedEmails: c.unconfirmedEmails.length,
+        protectedOn: c.protectedEmailPages,
+        hasForm: c.channels.some((ch) => ch.channel === 'form'),
+      }),
+    );
     for (const r of c.emailRisks) {
       lines.push(
         `- email: ${r.email}${r.is_freemail ? ' (публичная почта)' : ''} — источник: ${r.found_on_url ?? '—'}` +
@@ -219,7 +255,7 @@ export function toMarkdown(report: CandidatesReport, market: MarketCode, generat
       );
     }
     for (const e of c.unconfirmedEmails) lines.push(`- email: ${e.email} — источник: ${e.found_on_url} · ${UNCONFIRMED_EMAIL_NOTE}`);
-    for (const ch of c.channels) lines.push(`- ${channelLine(ch)}`);
+    for (const l of channelLines(c.channels)) lines.push(`- ${l}`);
     if (c.emailRisks.length === 0 && c.unconfirmedEmails.length === 0 && c.channels.length === 0) {
       lines.push('- каналов связи на сайте не найдено');
     }

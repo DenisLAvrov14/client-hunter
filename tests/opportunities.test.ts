@@ -116,9 +116,14 @@ describe('detectCapabilities', () => {
     expect(caps.flags.online_booking).toMatchObject({ present: true, detail: 'calendly.com' });
     expect(caps.flags.live_chat.present).toBe(true);
     expect(caps.flags.messenger_links.present).toBe(true);
-    expect(caps.flags.prices_visible.present).toBe(true);
+    expect(caps.flags.prices_visible).toMatchObject({ present: true, detail: '£35' });
     expect(caps.flags.cart_checkout.present).toBe(false);
     expect(caps.languages).toEqual(['en']);
+  });
+
+  it('price evidence keeps the whole amount, not just its first digit', () => {
+    const caps = detectCapabilities([page('<p>Price range: £1,204.50 through £2,520.00</p>')], 'woocommerce', null);
+    expect(caps.flags.prices_visible.detail).toBe('£1,204.50');
   });
 
   it('an empty mini-cart (£0.00) is not a visible price', () => {

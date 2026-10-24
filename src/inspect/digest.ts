@@ -2,7 +2,7 @@
 // Website text is untrusted data (spec 9.4): it is fenced in <website_content> and scanned for
 // prompt-injection phrases. No email addresses are included (data minimisation).
 import type { Db } from '../db/connection.js';
-import type { Capabilities, CapabilityKey } from './capabilities.js';
+import { CAPABILITY_LABELS, type Capabilities, type CapabilityKey } from './capabilities.js';
 
 export interface DigestObservation {
   id: string;
@@ -21,19 +21,6 @@ export interface Digest {
 }
 
 const PAGE_ORDER = ['home', 'about', 'services', 'workflow', 'catalog', 'product', 'contact', 'other', 'quote', 'legal'];
-
-const CAPABILITY_LABELS: Record<CapabilityKey, string> = {
-  cart_checkout: 'online shop / cart',
-  inquiry_form: 'enquiry or contact form',
-  online_booking: 'online booking',
-  calculator_configurator: 'calculator or configurator',
-  site_search: 'site search',
-  prices_visible: 'prices shown on the site',
-  price_on_request: 'prices only on request',
-  customer_login: 'customer login / account',
-  live_chat: 'live chat widget',
-  messenger_links: 'WhatsApp/Telegram/Viber links',
-};
 
 const INJECTION =
   /ignore (all |any )?(the )?(previous|prior|above) (instructions|prompts?)|disregard (all |the )?(previous|above)|system prompt|you are (now )?(an? )?(ai|assistant|language model|chatbot)|<\/?website_content>/i;
@@ -126,12 +113,13 @@ export function buildDigest(db: Db, companyId: string, maxChars: number): Digest
   if (capabilities?.productLinkCount !== null && capabilities?.productLinkCount !== undefined) {
     header.push(`Product links seen on catalogue pages: ${capabilities.productLinkCount}`);
   }
-  header.push('', '## Already on the site (detected by code, reliable)');
+  if (capabilities?.languages.length) header.push(`Site languages: ${capabilities.languages.join(', ')}`);
+  // The key comes first: it is what a "capability" evidence ref must contain (deep analysis).
+  header.push('', '## Already on the site (detected by code, reliable; capability key · what it is: yes/no)');
   if (capabilities) {
     for (const [key, cap] of Object.entries(capabilities.flags) as [CapabilityKey, Capabilities['flags'][CapabilityKey]][]) {
-      header.push(`- ${CAPABILITY_LABELS[key]}: ${cap.present ? `yes${cap.detail ? ` (${cap.detail})` : ''}` : 'no'}`);
+      header.push(`- ${key} · ${CAPABILITY_LABELS[key]}: ${cap.present ? `yes${cap.detail ? ` (${cap.detail})` : ''}` : 'no'}`);
     }
-    if (capabilities.languages.length) header.push(`- site languages: ${capabilities.languages.join(', ')}`);
   } else {
     header.push('- (not detected)');
   }
