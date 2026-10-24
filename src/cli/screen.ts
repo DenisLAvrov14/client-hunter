@@ -119,7 +119,7 @@ if (!apiKey) {
   process.exit(2);
 }
 
-const llm = new AnthropicLlmClient({ apiKey, timeoutMs: config.llm.request_timeout_ms, maxRetries: config.llm.sdk_max_retries });
+const llm = new AnthropicLlmClient({ apiKey, timeoutMs: config.llm.request_timeout_ms });
 const budget = new Budget(db, config, (msg) => process.stdout.write(`⚠ ${msg}\n`));
 const tally = { deep: 0, maybe: 0, skip: 0, failed: 0, no_data: 0, cached: 0 };
 

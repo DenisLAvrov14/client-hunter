@@ -60,8 +60,13 @@ function usageOf(u: Anthropic.Usage): LlmUsage {
 export class AnthropicLlmClient implements LlmClient {
   private readonly client: Anthropic;
 
-  constructor(opts: { apiKey: string; timeoutMs: number; maxRetries: number }) {
-    this.client = new Anthropic({ apiKey: opts.apiKey, timeout: opts.timeoutMs, maxRetries: opts.maxRetries });
+  /**
+   * SDK retries are always off (the SDK default is 2): one complete() is exactly one HTTP request,
+   * so every paid attempt passes through the caller's Budget.assertCanSpend and Budget.record.
+   * Callers retry transient errors themselves. `fetch` is a test seam only.
+   */
+  constructor(opts: { apiKey: string; timeoutMs: number; fetch?: typeof globalThis.fetch }) {
+    this.client = new Anthropic({ apiKey: opts.apiKey, timeout: opts.timeoutMs, maxRetries: 0, ...(opts.fetch ? { fetch: opts.fetch } : {}) });
   }
 
   async complete<S extends z.ZodType>(req: LlmRequest<S>): Promise<LlmResponse<z.infer<S>>> {

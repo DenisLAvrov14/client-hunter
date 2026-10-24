@@ -90,7 +90,7 @@ if (!apiKey) {
   process.stderr.write('ANTHROPIC_API_KEY не задан в .env\n');
   process.exit(2);
 }
-const llm = new AnthropicLlmClient({ apiKey, timeoutMs: config.llm.request_timeout_ms * 2, maxRetries: config.llm.sdk_max_retries });
+const llm = new AnthropicLlmClient({ apiKey, timeoutMs: config.llm.request_timeout_ms * 2 });
 const budget = new Budget(db, config, (msg) => process.stdout.write(`⚠ ${msg}\n`));
 const fetcher = new HttpFetcher({
   userAgent: config.app.user_agent,

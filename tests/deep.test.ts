@@ -24,11 +24,11 @@ import { internalLinks } from '../src/inspect/extract.js';
 import { buildPageContext } from '../src/inspect/page.js';
 import type { PageKind } from '../src/inspect/types.js';
 import { Budget, BudgetExceededError } from '../src/llm/budget.js';
-import { LlmError, type LlmClient, type LlmRequest, type LlmResponse } from '../src/llm/client.js';
+import { AnthropicLlmClient, LlmError, type LlmClient, type LlmRequest, type LlmResponse } from '../src/llm/client.js';
 import { analyzeCompany, estimateDeepRun, type DeepMeta } from '../src/llm/deep.js';
 import { buildDeepInput } from '../src/llm/deepInput.js';
 import { finalizeDeep, validateDeep, type DeepContext } from '../src/llm/deepValidate.js';
-import type { DeepResult } from '../src/llm/schemas.js';
+import { DeepResult } from '../src/llm/schemas.js';
 import { checkDraft, withOptOut } from '../src/outreach/copyCheck.js';
 import { LEGACY_NO_EMAIL_RULES_VERSION, RISK_RULES_VERSION, type RiskAssessment } from '../src/outreach/risk.js';
 import { dossierMarkdown, writeDossiers } from '../src/reports/dossier.js';
@@ -214,6 +214,21 @@ describe('validateDeep', () => {
     const v = validateDeep(a, input, ctx());
     expect(v.result.customer_journey[0]).toMatchObject({ kind: 'hypothesis', evidence: [] });
     expect(v.feedback).toMatch(/not in the page text/);
+  });
+
+  it('a quote from another page than cited is not a fact: URL corrected to the real page, claim → inference, retry asked', () => {
+    const a = answer(verified);
+    // "Bespoke oak staircases" is on the home page, the model cites the prices page.
+    a.customer_journey = [{ text: 'Делают лестницы на заказ', kind: 'fact', evidence: [{ type: 'quote', ref: 'Bespoke oak staircases', page_url: PRICES }] }];
+    const v = validateDeep(a, input, ctx());
+    expect(v.result.customer_journey[0]).toMatchObject({ kind: 'inference', evidence: [{ type: 'quote', ref: 'Bespoke oak staircases', page_url: HOME }] });
+    expect(v.issues.join('\n')).toContain(`is on ${HOME}, not on the cited ${PRICES}`);
+    expect(v.retry).toBe(true);
+    expect(v.feedback).toContain('Cite the page the quote is on');
+
+    // The same quote cited on its own page (trailing slash dropped) stays a fact.
+    a.customer_journey = [{ text: 'Делают лестницы на заказ', kind: 'fact', evidence: [{ type: 'quote', ref: 'Bespoke oak staircases', page_url: ORIGIN }] }];
+    expect(validateDeep(a, input, ctx()).result.customer_journey[0]!.kind).toBe('fact');
   });
 
   it('a capability the code sees as absent supports only an inference', () => {
@@ -457,5 +472,64 @@ describe('estimateDeepRun (dry run)', () => {
     expect(estimateDeepRun(db, config, [companyId])).toMatchObject({ toAnalyze: 0, cached: 1, inputTokens: 0, estimateUsd: 0, worstUsd: 0 });
     expect(estimateDeepRun(db, config, [companyId], true)).toMatchObject({ toAnalyze: 1, cached: 0 });
     expect(db.prepare('SELECT COUNT(*) AS n FROM llm_calls').get()).toEqual(calls);
+  });
+});
+
+describe('paid requests stay inside the budget', () => {
+  /** A fetch that answers every request with `status` and asks the SDK to retry; counts requests. */
+  function failingFetch(status: number) {
+    const calls: string[] = [];
+    const fetch = (async (input: string | URL | Request) => {
+      calls.push(String(input instanceof Request ? input.url : input));
+      return new Response(JSON.stringify({ type: 'error', error: { type: status === 429 ? 'rate_limit_error' : 'overloaded_error', message: 'busy' } }), {
+        status,
+        headers: { 'content-type': 'application/json', 'x-should-retry': 'true', 'retry-after': '0' },
+      });
+    }) as typeof globalThis.fetch;
+    return { fetch, calls };
+  }
+  const request = { model: 'claude-haiku-5-5', effort: 'medium' as const, maxOutputTokens: 100, system: 's', user: 'u', schema: DeepResult };
+
+  it('the Anthropic client never retries on its own: one complete() is one HTTP request (no network, fake fetch)', async () => {
+    for (const [status, code] of [[529, 'api'], [429, 'rate_limited'], [500, 'api']] as const) {
+      const { fetch, calls } = failingFetch(status);
+      const client = new AnthropicLlmClient({ apiKey: 'test-key', timeoutMs: 1000, fetch });
+      await expect(client.complete(request)).rejects.toMatchObject({ code });
+      expect(calls).toHaveLength(1);
+    }
+    let attempts = 0;
+    const offline = (async () => {
+      attempts++;
+      throw new TypeError('network down');
+    }) as typeof globalThis.fetch;
+    await expect(new AnthropicLlmClient({ apiKey: 'test-key', timeoutMs: 1000, fetch: offline }).complete(request)).rejects.toBeInstanceOf(LlmError);
+    expect(attempts).toBe(1);
+  });
+
+  it('every retry of a transient error is checked and recorded by the budget, at worst case when usage is unknown', async () => {
+    const busy = () => new LlmError('overloaded', 'api');
+    const db = freshDb();
+    const { companyId } = setup(db);
+    const llm = new FakeLlm([busy(), busy()]);
+    const budget = new Budget(db, config);
+    expect(await analyzeCompany(companyId, { db, config, llm, budget, fetcher: new FakeFetcher({}) })).toMatchObject({ status: 'failed' });
+    const rows = db.prepare('SELECT ok, cost_usd FROM llm_calls').all() as { ok: number; cost_usd: number }[];
+    expect(llm.requests).toHaveLength(2);
+    expect(rows).toHaveLength(2);
+    const worst = rows[0]!.cost_usd;
+    expect(worst).toBeGreaterThanOrEqual((config.llm.stages.deep.max_output_tokens * config.llm.prices['claude-haiku-5-5']!.output) / 1_000_000);
+    expect(rows.every((r) => r.ok === 0 && r.cost_usd === worst)).toBe(true);
+    expect(budget.runSpent).toBeCloseTo(2 * worst, 10);
+
+    // A run limit that covers one attempt but not the retry: the retry is refused before any request.
+    const db2 = freshDb();
+    const s2 = setup(db2);
+    const tight: Config = { ...config, limits: { ...config.limits, max_llm_cost_usd_per_run: worst * 1.5 } };
+    const llm2 = new FakeLlm([busy(), busy()]);
+    await expect(
+      analyzeCompany(s2.companyId, { db: db2, config: tight, llm: llm2, budget: new Budget(db2, tight), fetcher: new FakeFetcher({}) }),
+    ).rejects.toThrow(BudgetExceededError);
+    expect(llm2.requests).toHaveLength(1);
+    expect(db2.prepare('SELECT COUNT(*) AS n FROM llm_calls').get()).toEqual({ n: 1 });
   });
 });

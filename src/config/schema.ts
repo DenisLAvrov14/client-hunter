@@ -77,7 +77,6 @@ export const LlmSchema = z
   .strictObject({
     stages: z.strictObject({ screen: LlmStage, deep: LlmStage }),
     request_timeout_ms: z.number().int().positive(),
-    sdk_max_retries: z.number().int().min(0).max(5),
     prices: z.record(z.string(), TokenPrice),
     budget_warn_ratio: z.number().gt(0).lte(1),
   })

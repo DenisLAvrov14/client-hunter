@@ -5,7 +5,7 @@ import type { CapabilityKey } from '../inspect/capabilities.js';
 import { checkDraft } from '../outreach/copyCheck.js';
 import { normalizeLink, type DeepInput } from './deepInput.js';
 import type { DeepResult, StatementT } from './schemas.js';
-import { DUPLICATES, NUMBERS_IN_CLAIM, quoteFound } from './validate.js';
+import { DUPLICATES, NUMBERS_IN_CLAIM, quoteSource } from './validate.js';
 
 /** Extra pages the model may have read on its first pass. */
 export const MAX_EXTRA_PAGES = 3;
@@ -38,25 +38,35 @@ type Strength = 'strong' | 'weak' | 'invalid';
 
 const CONFIRMED_WORDS = /подтвержд|проверен|confirmed|verified|точно установлен/i;
 
-/** strong: verified finding, quote on the site, capability present; weak: likely finding, capability absent. */
-function evidenceStrength(e: StatementT['evidence'][number], input: DeepInput): Strength {
+type Evidence = StatementT['evidence'][number];
+
+/**
+ * strong: verified finding, quote on the cited page, capability present; weak: likely finding,
+ * capability absent, quote found only on another page. A miscited quote is kept with its real
+ * page URL (`miscitedAs` = the URL the model gave), never with the wrong one.
+ */
+function gradeEvidence(e: Evidence, input: DeepInput): { e: Evidence; strength: Strength; miscitedAs?: string } {
   const d = input.digest;
   switch (e.type) {
     case 'finding': {
       const o = d.observations.find((x) => x.id === e.ref.trim());
-      if (!o) return 'invalid';
-      return o.status === 'verified' ? 'strong' : 'weak';
+      if (!o) return { e, strength: 'invalid' };
+      return { e, strength: o.status === 'verified' ? 'strong' : 'weak' };
     }
-    case 'quote':
-      return quoteFound(e.ref, e.page_url, d) !== false ? 'strong' : 'invalid';
+    case 'quote': {
+      const src = quoteSource(e.ref, e.page_url, d);
+      if (!src) return { e, strength: 'invalid' };
+      if (src.onCitedPage) return { e, strength: 'strong' };
+      return { e: { ...e, page_url: src.url }, strength: 'weak', miscitedAs: e.page_url };
+    }
     case 'capability': {
       const cap = d.capabilities?.flags[e.ref.trim() as CapabilityKey];
-      if (!cap) return 'invalid';
+      if (!cap) return { e, strength: 'invalid' };
       // Code can miss a widget, so "the site has no X" is weaker than "the site has X".
-      return cap.present ? 'strong' : 'weak';
+      return { e, strength: cap.present ? 'strong' : 'weak' };
     }
     default:
-      return 'invalid';
+      return { e, strength: 'invalid' };
   }
 }
 
@@ -66,7 +76,11 @@ export function validateDeep(raw: DeepResult, input: DeepInput, ctx: DeepContext
   const fixable: string[] = [];
 
   const checkStatement = (s: StatementT, where: string): StatementT => {
-    const graded = s.evidence.map((e) => ({ e, strength: evidenceStrength(e, input) }));
+    const graded = s.evidence.map((e) => gradeEvidence(e, input));
+    for (const g of graded.filter((x) => x.miscitedAs !== undefined)) {
+      issues.push(`${where}: quote "${g.e.ref.slice(0, 60)}" is on ${g.e.page_url}, not on the cited ${g.miscitedAs || '(none)'}`);
+      fixable.push(`The quote "${g.e.ref.slice(0, 60)}" is on ${g.e.page_url}, not on ${g.miscitedAs || 'the page you cited'}. Cite the page the quote is on.`);
+    }
     for (const g of graded.filter((x) => x.strength === 'invalid' && x.e.type !== 'none')) {
       issues.push(`${where}: unverifiable evidence (${g.e.type}: "${g.e.ref.slice(0, 60)}")`);
       if (g.e.type === 'quote') fixable.push(`The quote "${g.e.ref.slice(0, 60)}" is not in the page text. Copy quotes exactly or drop them.`);

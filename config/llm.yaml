@@ -13,7 +13,8 @@ stages:
     digest_max_chars: 16000
 
 request_timeout_ms: 60000
-sdk_max_retries: 2               # SDK retries 429/5xx/network errors with backoff
+# No SDK retries: every HTTP request is one budgeted attempt; stages retry transient errors
+# themselves (screen: 2 attempts, deep: 2 per pass), each checked and recorded by the budget.
 
 # USD per 1M tokens. Anthropic pricing table cached 2026-10-06 (verify before relying on it):
 # Haiku 5.5 $0.10 in / $0.50 out for prompts up to 100K tokens; thinking is billed as output.
