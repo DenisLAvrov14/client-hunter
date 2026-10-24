@@ -7,6 +7,9 @@ import { normalizeLink, type DeepInput } from './deepInput.js';
 import type { DeepResult, StatementT } from './schemas.js';
 import { DUPLICATES, NUMBERS_IN_CLAIM, quoteFound } from './validate.js';
 
+/** Extra pages the model may have read on its first pass. */
+export const MAX_EXTRA_PAGES = 3;
+
 export interface DeepContext {
   rules: CopyRulesConfig;
   expectedLanguage: string;
@@ -136,7 +139,7 @@ export function validateDeep(raw: DeepResult, input: DeepInput, ctx: DeepContext
     for (const p of result.need_pages) {
       const key = normalizeLink(p.url);
       if (!input.knownLinks.has(key)) issues.push(`need_pages: ${p.url} is not a known internal link, ignored`);
-      else if (needPages.length < 3 && !needPages.includes(key)) needPages.push(key);
+      else if (needPages.length < MAX_EXTRA_PAGES && !needPages.includes(key)) needPages.push(key);
     }
   }
 

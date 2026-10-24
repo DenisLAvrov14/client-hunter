@@ -13,8 +13,8 @@ import type { Fetcher } from '../inspect/fetcher.js';
 import { newId } from '../util/ids.js';
 import { estimateInputTokens, type Budget } from './budget.js';
 import { LlmError, type LlmClient, type LlmUsage } from './client.js';
-import { buildDeepInput, type DeepInput, type ExtraPage } from './deepInput.js';
-import { finalizeDeep, validateDeep, type DeepContext, type DeepValidation } from './deepValidate.js';
+import { buildDeepInput, EXTRA_PAGE_MAX_CHARS, type DeepInput, type ExtraPage } from './deepInput.js';
+import { finalizeDeep, MAX_EXTRA_PAGES, validateDeep, type DeepContext, type DeepValidation } from './deepValidate.js';
 import { DeepResult } from './schemas.js';
 
 export const DEEP_PROMPT = readFileSync(fileURLToPath(new URL('./prompts/deep.md', import.meta.url)), 'utf8');
@@ -56,6 +56,61 @@ export function deepInputHash(model: string, promptVersion: string, inputText: s
   return createHash('sha256').update(`${model}\n${promptVersion}\n${inputText}`).digest('hex');
 }
 
+const deepHeader = (language: string, mode: string) => `Analyse this company.\nOutreach draft: language=${language}, mode=${mode}.\n\n`;
+/** Schema and format overhead per call, on top of the prompt and the user message. */
+const SCHEMA_OVERHEAD_TOKENS = 1000;
+/** Typical answer size, for the dry-run estimate only; limits always use max_output_tokens. */
+const TYPICAL_OUTPUT_TOKENS = 3000;
+
+function cachedAssessment(db: Db, companyId: string, inputHash: string): { payload_json: string; validation_json: string } | undefined {
+  return db
+    .prepare(`SELECT payload_json, validation_json FROM assessments WHERE company_id = ? AND stage = 'deep' AND input_hash = ? ORDER BY created_at DESC LIMIT 1`)
+    .get(companyId, inputHash) as { payload_json: string; validation_json: string } | undefined;
+}
+
+export interface DeepEstimate {
+  /** The first company with data and its input, to show the operator what would be sent. */
+  first: { companyId: string; text: string } | null;
+  toAnalyze: number;
+  cached: number;
+  noData: number;
+  inputTokens: number;
+  /** One call per company with a typical answer. */
+  estimateUsd: number;
+  /** Every retry and the second pass with the maximum of extra pages, each at max output. */
+  worstUsd: number;
+}
+
+/** Dry run of analyzeCompany for a batch: reads the database only, never calls the API. */
+export function estimateDeepRun(db: Db, config: Config, companyIds: string[], force = false): DeepEstimate {
+  const stage = config.llm.stages.deep;
+  const p = config.llm.prices[stage.model]!;
+  const extraTokens = estimateInputTokens('x'.repeat(MAX_EXTRA_PAGES * EXTRA_PAGE_MAX_CHARS));
+  const est: DeepEstimate = { first: null, toAnalyze: 0, cached: 0, noData: 0, inputTokens: 0, estimateUsd: 0, worstUsd: 0 };
+  for (const id of companyIds) {
+    const company = db.prepare('SELECT market FROM companies WHERE id = ?').get(id) as { market: string } | undefined;
+    const market = company && config.markets.get(company.market as MarketCode);
+    const input = market ? buildDeepInput(db, id, stage.digest_max_chars) : null;
+    if (!market || !input) {
+      est.noData++;
+      continue;
+    }
+    est.first ??= { companyId: id, text: input.text };
+    if (!force && cachedAssessment(db, id, deepInputHash(stage.model, DEEP_PROMPT_VERSION, input.text))) {
+      est.cached++;
+      continue;
+    }
+    const tokens = estimateInputTokens(DEEP_PROMPT, deepHeader(market.language, market.first_touch_mode), input.text) + SCHEMA_OVERHEAD_TOKENS;
+    est.toAnalyze++;
+    est.inputTokens += tokens;
+    est.estimateUsd += (tokens * p.input + TYPICAL_OUTPUT_TOKENS * p.output) / 1_000_000;
+    // Two passes of two attempts; the second pass also carries the extra pages (and feedback, ~overhead).
+    const worstIn = 2 * (tokens + SCHEMA_OVERHEAD_TOKENS) + 2 * (tokens + extraTokens + SCHEMA_OVERHEAD_TOKENS);
+    est.worstUsd += (worstIn * p.input + 4 * stage.max_output_tokens * p.output) / 1_000_000;
+  }
+  return est;
+}
+
 export async function analyzeCompany(companyId: string, deps: DeepDeps): Promise<DeepOutcome> {
   const { db, config, llm, budget } = deps;
   const stage = config.llm.stages.deep;
@@ -68,9 +123,7 @@ export async function analyzeCompany(companyId: string, deps: DeepDeps): Promise
   if (!base) return { status: 'no_data' };
   const inputHash = deepInputHash(stage.model, DEEP_PROMPT_VERSION, base.text);
   if (!deps.force) {
-    const cached = db
-      .prepare(`SELECT payload_json, validation_json FROM assessments WHERE company_id = ? AND stage = 'deep' AND input_hash = ? ORDER BY created_at DESC LIMIT 1`)
-      .get(companyId, inputHash) as { payload_json: string; validation_json: string } | undefined;
+    const cached = cachedAssessment(db, companyId, inputHash);
     if (cached) {
       return { status: 'cached', result: JSON.parse(cached.payload_json) as DeepResult, meta: JSON.parse(cached.validation_json) as DeepMeta, cost: 0 };
     }
@@ -84,7 +137,7 @@ export async function analyzeCompany(companyId: string, deps: DeepDeps): Promise
     companyName: company.name,
     allowExtraPages,
   });
-  const header = `Analyse this company.\nOutreach draft: language=${market.language}, mode=${market.first_touch_mode}.\n\n`;
+  const header = deepHeader(market.language, market.first_touch_mode);
   let cost = 0;
   let calls = 0;
   let lastError = '';
@@ -96,7 +149,7 @@ export async function analyzeCompany(companyId: string, deps: DeepDeps): Promise
     for (let attempt = 1; attempt <= 2; attempt++) {
       const user = `${header}${input.text}${feedback ? `\n\n${feedback}` : ''}`;
       const worst: LlmUsage = {
-        inputTokens: estimateInputTokens(DEEP_PROMPT, user) + 1000, // + schema overhead
+        inputTokens: estimateInputTokens(DEEP_PROMPT, user) + SCHEMA_OVERHEAD_TOKENS,
         outputTokens: stage.max_output_tokens,
         cacheReadTokens: 0,
         cacheWriteTokens: 0,

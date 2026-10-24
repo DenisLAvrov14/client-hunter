@@ -1,3 +1,6 @@
+import { mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { z } from 'zod';
 import { loadConfig, type Config } from '../src/config/load.js';
@@ -6,10 +9,13 @@ import { migrate } from '../src/db/migrate.js';
 import {
   finishInspection,
   insertObservation,
+  insertOutreachRisk,
   insertPage,
   latestSuccessfulInspection,
   startInspection,
   updateCompany,
+  upsertContact,
+  upsertContactChannel,
   upsertDiscovered,
 } from '../src/db/repo.js';
 import { detectCapabilities } from '../src/inspect/capabilities.js';
@@ -19,11 +25,13 @@ import { buildPageContext } from '../src/inspect/page.js';
 import type { PageKind } from '../src/inspect/types.js';
 import { Budget, BudgetExceededError } from '../src/llm/budget.js';
 import { LlmError, type LlmClient, type LlmRequest, type LlmResponse } from '../src/llm/client.js';
-import { analyzeCompany } from '../src/llm/deep.js';
+import { analyzeCompany, estimateDeepRun, type DeepMeta } from '../src/llm/deep.js';
 import { buildDeepInput } from '../src/llm/deepInput.js';
 import { finalizeDeep, validateDeep, type DeepContext } from '../src/llm/deepValidate.js';
 import type { DeepResult } from '../src/llm/schemas.js';
 import { checkDraft, withOptOut } from '../src/outreach/copyCheck.js';
+import { LEGACY_NO_EMAIL_RULES_VERSION, RISK_RULES_VERSION, type RiskAssessment } from '../src/outreach/risk.js';
+import { dossierMarkdown, writeDossiers } from '../src/reports/dossier.js';
 
 const config = loadConfig();
 const rules = config.copyRules;
@@ -311,5 +319,143 @@ describe('analyzeCompany', () => {
     const llm = new FakeLlm([]);
     await expect(analyzeCompany(companyId, deps(db, llm, undefined, broke))).rejects.toThrow(BudgetExceededError);
     expect(llm.requests).toHaveLength(0);
+  });
+});
+
+describe('dossierMarkdown', () => {
+  const meta = (over: Partial<DeepMeta> = {}): DeepMeta => ({ extraPages: [], skippedPages: [], outreachIssues: [], issues: [], eligible: [true, true], calls: 1, ...over });
+  const risk = (over: Partial<RiskAssessment>): RiskAssessment => ({
+    jurisdiction: 'UK',
+    recipientType: 'company_likely',
+    risk: 'low',
+    reason: 'Компания (Ltd на сайте)',
+    confidence: 'medium',
+    unknowns: [],
+    toVerify: [],
+    ...over,
+  });
+
+  /** setup() plus contacts and risk rows: a current recipient row, a legacy one, a per-address one and a phone. */
+  function withContacts(db: Db) {
+    const s = setup(db);
+    insertOutreachRisk(db, s.companyId, s.inspectionId, null, risk({}), RISK_RULES_VERSION);
+    insertOutreachRisk(db, s.companyId, s.inspectionId, null, risk({ risk: 'review_required', reason: 'Рабочий публичный email не найден' }), LEGACY_NO_EMAIL_RULES_VERSION);
+    const contact = upsertContact(db, s.companyId, { email: 'info@oakstairs.co.uk', kind: 'role', roleHint: 'info', isFreemail: false, foundOnUrl: HOME }, true);
+    insertOutreachRisk(db, s.companyId, s.inspectionId, contact, risk({ reason: 'Ролевой адрес компании' }), RISK_RULES_VERSION);
+    upsertContactChannel(db, s.companyId, s.inspectionId, {
+      channel: 'phone',
+      value: '+441131234567',
+      matchKey: '+441131234567',
+      uncertain: false,
+      note: null,
+      display: '0113 123 4567',
+      sourceUrl: HOME,
+    });
+    return s;
+  }
+
+  it('labels every claim, resolves finding evidence and marks the draft as not sent, with the opt-out line added by code', () => {
+    const db = freshDb();
+    const { companyId, verified } = withContacts(db);
+    const md = dossierMarkdown(db, config, companyId, answer(verified), meta(), 0.0123);
+    expect(md).toContain('## Oak Stairs — oakstairs.co.uk (UK, Leeds)');
+    expect(md).toContain('**Рекомендация:** 🟢 стоит предложить');
+    expect(md).toContain('✅ факт: Цену узнают по email');
+    expect(md).toContain('«email us your measurements»');
+    expect(md).toContain('💭 гипотеза: Клиент быстрее понимает порядок цены');
+    expect(md).toContain('### Лучшее предложение: Онлайн-калькулятор стоимости лестницы');
+    expect(md).toContain('- **Мобильная версия сайта**');
+    expect(md).toContain('ТОЛЬКО ДЛЯ ПРОСМОТРА, НЕ ОТПРАВЛЕНО');
+    expect(md).toContain("I won't contact you again.\n```");
+    expect(md).toContain('Вызовов API: 1 · стоимость: $0.0123');
+
+    // A finding cited as evidence is shown with its code, status and evidence URL from the database.
+    const mobileFirst = dossierMarkdown(db, config, companyId, answer(verified, { best_opportunity_index: 1 }), meta(), 0);
+    expect(mobileFirst).toContain('### Лучшее предложение: Мобильная версия сайта');
+    expect(mobileFirst).toContain(`✅ факт: Нет viewport — находка NO_VIEWPORT_META (verified) ${HOME}`);
+  });
+
+  it('shows contact availability and outreach risk separately; ignores legacy "no email" risk rows', () => {
+    const db = freshDb();
+    const { companyId, verified } = withContacts(db);
+    const md = dossierMarkdown(db, config, companyId, answer(verified), meta(), 0);
+    expect(md).toContain('Доступность контакта: email');
+    expect(md).toContain('- email: info@oakstairs.co.uk — источник: https://www.oakstairs.co.uk/ · риск адреса: 🟢 low');
+    expect(md).toContain('+441131234567 (0113 123 4567)');
+    expect(md).toContain('**Риск обращения (отдельно от доступности):** 🟢 low — Компания (Ltd на сайте)');
+    expect(md).not.toContain('Рабочий публичный email не найден');
+  });
+
+  it('without any risk row the risk is "not determined", never inferred from the contacts', () => {
+    const db = freshDb();
+    const { companyId, verified } = setup(db);
+    expect(dossierMarkdown(db, config, companyId, answer(verified), meta(), 0)).toContain('**Риск обращения (отдельно от доступности):** не определён');
+  });
+
+  it('a draft that failed the copy rules is flagged as unusable', () => {
+    const db = freshDb();
+    const { companyId, verified } = setup(db);
+    const md = dossierMarkdown(db, config, companyId, answer(verified), meta({ outreachIssues: ['цифры в письме'] }), 0);
+    expect(md).toContain('⚠ Черновик не прошёл проверку правил и использовать его нельзя: цифры в письме');
+  });
+
+  it('model text with a code fence cannot break out of the draft block', () => {
+    const db = freshDb();
+    const { companyId, verified } = setup(db);
+    const a = answer(verified, { outreach: { language: 'en', subject: 'Hi', body: 'Hello\n```\n# Injected heading\n```' } });
+    const md = dossierMarkdown(db, config, companyId, a, meta(), 0);
+    expect(md).toContain('````text\nSubject: Hi');
+    expect(md).toMatch(/I won't contact you again\.\n````\n/);
+  });
+
+  it('writeDossiers writes one Markdown file with the summary and the review-only notice', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'ch-dossier-'));
+    const file = writeDossiers(dir, ['## A\n', '## B\n'], 'Компаний: 2');
+    expect(path.dirname(file)).toBe(path.join(dir, 'reports'));
+    expect(path.basename(file)).toMatch(/^dossiers-\d{12}\.md$/);
+    const text = readFileSync(file, 'utf8');
+    expect(text).toContain('Компаний: 2');
+    expect(text).toContain('Ничего не отправлено');
+    expect(text).toContain('## A\n\n## B');
+  });
+});
+
+describe('estimateDeepRun (dry run)', () => {
+  const stage = config.llm.stages.deep;
+  const price = config.llm.prices[stage.model]!;
+
+  it('works on a read-only database: shows the first input, counts tokens, worst case covers every retry', () => {
+    const file = path.join(mkdtempSync(path.join(tmpdir(), 'ch-deep-')), 'db.sqlite');
+    const rw = openDb(file);
+    migrate(rw);
+    const { companyId } = setup(rw);
+    const empty = upsertDiscovered(
+      rw,
+      { name: 'No Data', websiteUrl: 'https://nodata.co.uk/', city: null, sourceRef: null, query: null },
+      { market: 'UK', segment: 'S3', sourceId: 'csv', termsNote: 't' },
+    )!.id;
+    const expectedText = buildDeepInput(rw, companyId, stage.digest_max_chars)!.text;
+    rw.close();
+
+    const db = openDb(file, { readonly: true });
+    const est = estimateDeepRun(db, config, [empty, companyId]);
+    expect(est.first).toEqual({ companyId, text: expectedText });
+    expect(est).toMatchObject({ toAnalyze: 1, cached: 0, noData: 1 });
+    expect(est.inputTokens).toBeGreaterThan(expectedText.length / 3);
+    expect(est.estimateUsd).toBeGreaterThan(0);
+    expect(est.worstUsd).toBeGreaterThan(est.estimateUsd);
+    expect(est.worstUsd).toBeGreaterThanOrEqual((4 * est.inputTokens * price.input + 4 * stage.max_output_tokens * price.output) / 1_000_000);
+    expect(() => db.prepare(`DELETE FROM companies`).run()).toThrow(/readonly/);
+    db.close();
+  });
+
+  it('an input analysed before is free (cache); --force counts it again', async () => {
+    const db = freshDb();
+    const { companyId, verified } = setup(db);
+    await analyzeCompany(companyId, { db, config, llm: new FakeLlm([answer(verified)]), budget: new Budget(db, config), fetcher: new FakeFetcher({}) });
+    const calls = db.prepare('SELECT COUNT(*) AS n FROM llm_calls').get();
+    expect(estimateDeepRun(db, config, [companyId])).toMatchObject({ toAnalyze: 0, cached: 1, inputTokens: 0, estimateUsd: 0, worstUsd: 0 });
+    expect(estimateDeepRun(db, config, [companyId], true)).toMatchObject({ toAnalyze: 1, cached: 0 });
+    expect(db.prepare('SELECT COUNT(*) AS n FROM llm_calls').get()).toEqual(calls);
   });
 });

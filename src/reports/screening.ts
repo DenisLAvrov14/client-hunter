@@ -2,7 +2,13 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Db } from '../db/connection.js';
-import { currentContactChannels, latestSuccessfulInspection, unconfirmedEmails } from '../db/repo.js';
+import {
+  currentContactChannels,
+  inspectionContactStatus,
+  latestSuccessfulInspection,
+  recipientRisk,
+  unconfirmedEmails,
+} from '../db/repo.js';
 import { channelLine, UNCONFIRMED_EMAIL_NOTE } from './candidates.js';
 import { SAMPLE_GROUP_LABELS, type SampleGroup } from '../llm/sample.js';
 import type { ScreenResult } from '../llm/schemas.js';
@@ -84,16 +90,9 @@ export function buildScreeningReport(db: Db, refs: ScreenedRef[], meta: { runCos
     const g = groups.get(r.id);
     // Contacts and risk come from the latest SUCCESSFUL inspection: a failed one says nothing about them.
     const lastOk = latestSuccessfulInspection(db, r.id);
-    // Recipient-level risk only (contact_id NULL, rules from 2026-10-23.2); availability is separate.
-    const risk = db
-      .prepare(
-        `SELECT risk, reason FROM outreach_risk WHERE company_id = ? AND contact_id IS NULL AND rules_version != '2026-10-23.1'
-           AND inspection_id IS ? LIMIT 1`,
-      )
-      .get(r.id, lastOk) as { risk: string; reason: string } | undefined;
-    const contactStatus = (
-      db.prepare('SELECT contact_status FROM inspections WHERE id IS ?').get(lastOk) as { contact_status: string | null } | undefined
-    )?.contact_status;
+    // Recipient-level risk only; availability is separate.
+    const risk = recipientRisk(db, r.id, lastOk);
+    const contactStatus = inspectionContactStatus(db, lastOk);
 
     lines.push(`### ${r.decision.toUpperCase()} · ${r.name ?? r.domain} — ${r.domain} (${r.market})`, '');
     lines.push(

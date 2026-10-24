@@ -6,7 +6,7 @@ import type { Capabilities } from '../inspect/capabilities.js';
 import type { PageLink } from '../inspect/extract.js';
 import type { ObservationDraft, PageContext } from '../inspect/types.js';
 import type { ContactStatus } from '../outreach/contactStatus.js';
-import type { RiskAssessment } from '../outreach/risk.js';
+import { LEGACY_NO_EMAIL_RULES_VERSION, type RiskAssessment } from '../outreach/risk.js';
 import type { CandidateCompany } from '../sources/types.js';
 import { registrableDomain } from '../util/domain.js';
 import { newId } from '../util/ids.js';
@@ -304,6 +304,55 @@ export function unconfirmedEmails(db: Db, companyId: string): { email: string; f
        ORDER BY k.email`,
     )
     .all({ companyId, latest }) as { email: string; found_on_url: string }[];
+}
+
+export interface RiskRow {
+  email: string | null;
+  is_freemail: number | null;
+  found_on_url: string | null;
+  risk: string;
+  reason: string;
+  recipient_type: string;
+}
+
+/**
+ * Risk for the recipient as such (market + recipient type) at one inspection; null when there is
+ * none, including inspections assessed under the legacy rules where a row without contact meant
+ * "no email found". Contact availability is separate (inspectionContactStatus).
+ */
+export function recipientRisk(db: Db, companyId: string, inspectionId: string | null): RiskRow | null {
+  return (
+    (db
+      .prepare(
+        `SELECT NULL AS email, NULL AS is_freemail, NULL AS found_on_url, r.risk, r.reason, r.recipient_type FROM outreach_risk r
+         WHERE r.company_id = ? AND r.inspection_id IS ? AND r.contact_id IS NULL AND r.rules_version != ?
+         ORDER BY r.created_at DESC LIMIT 1`,
+      )
+      .get(companyId, inspectionId, LEGACY_NO_EMAIL_RULES_VERSION) as RiskRow | undefined) ?? null
+  );
+}
+
+/** Per-address risk refinements at one inspection, lowest risk first. */
+export function emailRisks(db: Db, companyId: string, inspectionId: string | null): RiskRow[] {
+  return db
+    .prepare(
+      `SELECT k.email, k.is_freemail, k.found_on_url, r.risk, r.reason, r.recipient_type FROM outreach_risk r
+       JOIN contacts k ON k.id = r.contact_id
+       WHERE r.company_id = ? AND r.inspection_id IS ?
+       ORDER BY CASE r.risk WHEN 'low' THEN 0 WHEN 'review_required' THEN 1 ELSE 2 END, k.email`,
+    )
+    .all(companyId, inspectionId) as RiskRow[];
+}
+
+export function inspectionContactStatus(db: Db, inspectionId: string | null): string | null {
+  const row = db.prepare('SELECT contact_status FROM inspections WHERE id IS ?').get(inspectionId) as { contact_status: string | null } | undefined;
+  return row?.contact_status ?? null;
+}
+
+export function observationById(db: Db, id: string): { code: string; status: string; evidence_url: string | null } | null {
+  return (db.prepare('SELECT code, status, evidence_url FROM observations WHERE id = ?').get(id) as
+    | { code: string; status: string; evidence_url: string | null }
+    | undefined) ?? null;
 }
 
 export function insertOutreachRisk(

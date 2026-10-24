@@ -18,7 +18,7 @@ export interface DeepInput {
 }
 
 const LINKS_MAX_CHARS = 3000;
-const EXTRA_PAGE_MAX_CHARS = 3000;
+export const EXTRA_PAGE_MAX_CHARS = 3000;
 
 export const normalizeLink = (u: string) => u.split('#')[0]!.replace(/\/$/, '');
 

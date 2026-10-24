@@ -6,7 +6,7 @@ stages:
     effort: low
     max_output_tokens: 3000      # includes thinking tokens; truncated answers are retried once
     digest_max_chars: 6000       # cleaned site text + findings sent per company (~1.5-2K tokens)
-  deep:                          # stage C: shortlisted companies only (not implemented yet)
+  deep:                          # stage C (npm run deep): shortlisted companies only, up to 4 calls each
     model: claude-haiku-5-5
     effort: medium
     max_output_tokens: 8000

@@ -2,7 +2,14 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { MarketCode } from '../config/schema.js';
 import type { Db } from '../db/connection.js';
-import { currentContactChannels, unconfirmedEmails, type ContactChannelRow } from '../db/repo.js';
+import {
+  currentContactChannels,
+  emailRisks,
+  recipientRisk,
+  unconfirmedEmails,
+  type ContactChannelRow,
+  type RiskRow,
+} from '../db/repo.js';
 import type { Capabilities } from '../inspect/capabilities.js';
 
 interface CompanyReportRow {
@@ -30,15 +37,6 @@ interface ObservationRow {
   screenshot_path: string | null;
 }
 
-interface RiskRow {
-  email: string | null;
-  is_freemail: number | null;
-  found_on_url: string | null;
-  risk: string;
-  reason: string;
-  recipient_type: string;
-}
-
 export interface CompanyReport extends CompanyReportRow {
   observations: ObservationRow[];
   /** Risk for the recipient as such (market + recipient type); null for inspections before rules 2026-10-23.2. */
@@ -57,10 +55,6 @@ export interface CandidatesReport {
   funnel: { status: string; count: number }[];
   rejectReasons: { reason: string; count: number }[];
 }
-
-const RISK_ORDER = "CASE r.risk WHEN 'low' THEN 0 WHEN 'review_required' THEN 1 ELSE 2 END";
-// Under rules 2026-10-23.1 a row without contact meant "no email found", not the recipient's risk.
-const LEGACY_NO_EMAIL_RULES = '2026-10-23.1';
 
 /**
  * Every usable inspected company of a market with the evidence of its latest inspection.
@@ -88,21 +82,8 @@ export function buildCandidatesReport(db: Db, market: MarketCode): CandidatesRep
            ORDER BY CASE status WHEN 'verified' THEN 0 WHEN 'likely' THEN 1 ELSE 2 END, code`,
         )
         .all(c.id, c.last_inspection_id) as ObservationRow[],
-      recipientRisk:
-        (db
-          .prepare(
-            `SELECT NULL AS email, NULL AS is_freemail, NULL AS found_on_url, r.risk, r.reason, r.recipient_type FROM outreach_risk r
-             WHERE r.company_id = ? AND r.inspection_id IS ? AND r.contact_id IS NULL AND r.rules_version != ?
-             ORDER BY r.created_at DESC LIMIT 1`,
-          )
-          .get(c.id, c.last_inspection_id, LEGACY_NO_EMAIL_RULES) as RiskRow | undefined) ?? null,
-      emailRisks: db
-        .prepare(
-          `SELECT k.email, k.is_freemail, k.found_on_url, r.risk, r.reason, r.recipient_type FROM outreach_risk r
-           JOIN contacts k ON k.id = r.contact_id
-           WHERE r.company_id = ? AND r.inspection_id IS ? ORDER BY ${RISK_ORDER}`,
-        )
-        .all(c.id, c.last_inspection_id) as RiskRow[],
+      recipientRisk: recipientRisk(db, c.id, c.last_inspection_id),
+      emailRisks: emailRisks(db, c.id, c.last_inspection_id),
       channels: currentContactChannels(db, c.id),
       unconfirmedEmails: unconfirmedEmails(db, c.id),
       capabilities: caps ? Object.entries(caps.flags).filter(([, v]) => v.present).map(([k]) => k) : [],
@@ -173,7 +154,7 @@ export function channelLine(ch: ContactChannelRow): string {
 
 export const UNCONFIRMED_EMAIL_NOTE = '⚠ не подтверждён последней проверкой (страница-источник не загружалась)';
 
-const RISK_LABEL: Record<string, string> = { low: '🟢 low', review_required: '🟡 review_required', high: '🔴 high' };
+export const RISK_LABEL: Record<string, string> = { low: '🟢 low', review_required: '🟡 review_required', high: '🔴 high' };
 
 export function toMarkdown(report: CandidatesReport, market: MarketCode, generatedAt = new Date()): string {
   const withFindings = report.companies.filter((c) => c.observations.some((o) => o.status === 'verified')).length;

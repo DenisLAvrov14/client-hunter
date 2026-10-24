@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { openDb } from '../src/db/connection.js';
-import { migrate } from '../src/db/migrate.js';
+import { migrate, pendingMigrations } from '../src/db/migrate.js';
 import { companiesForReinspection } from '../src/db/repo.js';
 
 describe('migrate', () => {
@@ -47,6 +47,21 @@ describe('migrate', () => {
       ]),
     );
     db.close();
+  });
+
+  it('pendingMigrations lists what migrate would apply, without changing a read-only database', () => {
+    const file = path.join(mkdtempSync(path.join(tmpdir(), 'ch-pending-')), 'db.sqlite');
+    const rw = openDb(file);
+    expect(pendingMigrations(rw)).toHaveLength(5);
+    migrate(rw, path.resolve('migrations'));
+    rw.prepare('DELETE FROM schema_migrations WHERE name = ?').run('005_contact_channels.sql');
+    rw.close();
+
+    const ro = openDb(file, { readonly: true });
+    expect(pendingMigrations(ro)).toEqual(['005_contact_channels.sql']);
+    expect(() => ro.prepare('DELETE FROM schema_migrations').run()).toThrow(/readonly/);
+    ro.close();
+    expect(() => openDb(path.join(path.dirname(file), 'missing.sqlite'), { readonly: true })).toThrow();
   });
 
   it('enforces foreign keys and unique domains', () => {
