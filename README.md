@@ -64,6 +64,7 @@ npm run deep -- --domain a1designs.co.uk --domain freza.ru             # пла�
 | `npm run screen -- --market UK --limit 10` | этап B: отбор компаний через Claude Haiku (**платно**, ~$0.001 за компанию; лимиты в `config/limits.yaml`) |
 | `npm run deep -- --dry-run --domain example.co.uk` | этап C: показать вход и оценку стоимости — **без вызова API и без записи в базу** |
 | `npm run deep -- --domain example.co.uk [--domain …]` | этап C: глубокий анализ и досье с черновиком письма для просмотра (**платно**; ничего не отправляется) |
+| `npm run leads` | коммерческие лиды по сохранённым данным (без LLM): проекты, которые можно продать, а не дефекты сайта; `data/reports/leads-*.md` и `.csv` |
 | `npm run import-csv -- --file list.csv --market UK --segment S2` | добавить свои домены (CSV: `website,name,city` или по домену в строке) |
 | `npm run migrate` | применить `migrations/*.sql` |
 | `npm run check-config` | проверить `config/` и флаги из `.env` |

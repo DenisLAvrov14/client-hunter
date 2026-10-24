@@ -16,6 +16,7 @@
     "reinspect": "tsx src/cli/reinspect.ts",
     "screen": "tsx src/cli/screen.ts",
     "deep": "tsx src/cli/deep.ts",
+    "leads": "tsx src/cli/leads.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
