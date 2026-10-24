@@ -86,6 +86,14 @@ export const DeepResult = z.object({
     language: z.enum(['en', 'ru', 'nl']),
     subject: z.string(),
     body: z.string().describe('Greeting + one observation + one proposal + one question. No signature, no opt-out line'),
+    opportunity_index: z.number().int().describe('Index in opportunities of the proposal this draft makes; must be best_opportunity_index'),
+    observation_index: z
+      .number()
+      .int()
+      .describe("Index in that opportunity's `observed` of the ONE observation the body mentions"),
+    framing: z
+      .enum(['observation', 'question'])
+      .describe('observation: the body states what was seen (only for a fact); question: the body asks about it (required for an inference)'),
   }),
   need_pages: z
     .array(z.object({ url: z.string(), reason: z.string() }))

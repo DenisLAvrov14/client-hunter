@@ -9,7 +9,7 @@ import {
   recipientRisk,
   unconfirmedEmails,
 } from '../db/repo.js';
-import { channelLine, UNCONFIRMED_EMAIL_NOTE } from './candidates.js';
+import { channelLines, UNCONFIRMED_EMAIL_NOTE } from './candidates.js';
 import { SAMPLE_GROUP_LABELS, type SampleGroup } from '../llm/sample.js';
 import type { ScreenResult } from '../llm/schemas.js';
 import type { OpportunityCheck } from '../llm/validate.js';
@@ -133,7 +133,7 @@ export function buildScreeningReport(db: Db, refs: ScreenedRef[], meta: { runCos
       .all(r.id, lastOk) as { email: string; found_on_url: string }[];
     for (const e of emails) lines.push(`- email: ${e.email} — источник: ${e.found_on_url}`);
     for (const e of unconfirmedEmails(db, r.id)) lines.push(`- email: ${e.email} — источник: ${e.found_on_url} · ${UNCONFIRMED_EMAIL_NOTE}`);
-    for (const ch of currentContactChannels(db, r.id)) lines.push(`- ${channelLine(ch)}`);
+    for (const l of channelLines(currentContactChannels(db, r.id))) lines.push(`- ${l}`);
     lines.push(
       `<sub>токены: ${r.input_tokens ?? '?'} вход / ${r.output_tokens ?? '?'} выход · $${(r.cost_usd ?? 0).toFixed(4)}</sub>`,
       '',

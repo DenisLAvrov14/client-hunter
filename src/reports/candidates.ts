@@ -152,6 +152,25 @@ export function channelLine(ch: ContactChannelRow): string {
   return `${CHANNEL_LABEL[ch.channel] ?? ch.channel}: ${shown} — источник: ${ch.source_url}${marks.length ? ` · ${marks.join(' · ')}` : ''}`;
 }
 
+const CONTACT_PAGE = /contact|kontakt|контакт|quote|offerte|zayavk|заявк/i;
+
+/**
+ * Report lines for a company's channels. A site-wide form (footer or header) is recorded once per
+ * page it appears on; confirmed forms are shown as ONE line — the contact-like page first, the other
+ * pages by path — instead of one line per page. Data stays as stored; this is presentation only.
+ */
+export function channelLines(channels: ContactChannelRow[]): string[] {
+  const forms = channels.filter((c) => c.channel === 'form' && c.confirmed);
+  const lines = channels.filter((c) => !forms.includes(c)).map(channelLine);
+  if (forms.length === 1) lines.unshift(channelLine(forms[0]!));
+  if (forms.length > 1) {
+    const main = forms.find((f) => CONTACT_PAGE.test(new URL(f.value).pathname)) ?? forms[0]!;
+    const others = forms.filter((f) => f !== main).map((f) => new URL(f.value).pathname);
+    lines.unshift(`форма: ${main.value} — форма обращения есть на ${forms.length} страницах сайта (также ${others.join(', ')})`);
+  }
+  return lines;
+}
+
 export const UNCONFIRMED_EMAIL_NOTE = '⚠ не подтверждён последней проверкой (страница-источник не загружалась)';
 
 export const RISK_LABEL: Record<string, string> = { low: '🟢 low', review_required: '🟡 review_required', high: '🔴 high' };
@@ -200,7 +219,7 @@ export function toMarkdown(report: CandidatesReport, market: MarketCode, generat
       );
     }
     for (const e of c.unconfirmedEmails) lines.push(`- email: ${e.email} — источник: ${e.found_on_url} · ${UNCONFIRMED_EMAIL_NOTE}`);
-    for (const ch of c.channels) lines.push(`- ${channelLine(ch)}`);
+    for (const l of channelLines(c.channels)) lines.push(`- ${l}`);
     if (c.emailRisks.length === 0 && c.unconfirmedEmails.length === 0 && c.channels.length === 0) {
       lines.push('- каналов связи на сайте не найдено');
     }

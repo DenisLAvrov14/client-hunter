@@ -1,10 +1,16 @@
 import { load } from 'cheerio';
 import type { PageContext, PageKind } from './types.js';
 
+const BLOCK_OR_LINK =
+  'p, div, section, article, header, footer, nav, aside, main, h1, h2, h3, h4, h5, h6, li, dt, dd, td, th, tr, br, a, button, label, option, blockquote, figcaption';
+
 export function buildPageContext(url: string, kind: PageKind, status: number, html: string): PageContext {
   const $ = load(html);
   const $text = load(html);
   $text('script, style, noscript, template, svg').remove();
+  // cheerio's text() glues adjacent elements ("<h1>A</h1><p>Sign in</p>" → "ASign in"), which breaks
+  // word-boundary patterns such as the login and booking detectors. Separate them first.
+  $text(BLOCK_OR_LINK).after(' ');
   const text = $text('body').text().replace(/\s+/g, ' ').trim();
   return { url, kind, status, html, $, text };
 }

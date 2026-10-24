@@ -16,6 +16,42 @@ export type CapabilityKey =
   | 'live_chat'
   | 'messenger_links';
 
+/** Human-readable label shown next to each key in the LLM input. */
+export const CAPABILITY_LABELS: Record<CapabilityKey, string> = {
+  cart_checkout: 'online shop / cart',
+  inquiry_form: 'enquiry or contact form',
+  online_booking: 'online booking',
+  calculator_configurator: 'calculator or configurator',
+  site_search: 'site search',
+  prices_visible: 'prices shown on the site',
+  price_on_request: 'prices only on request',
+  customer_login: 'customer login / account',
+  live_chat: 'live chat widget',
+  messenger_links: 'WhatsApp/Telegram/Viber links',
+};
+
+const KEY_BY_LABEL = new Map(Object.entries(CAPABILITY_LABELS).map(([k, label]) => [label.toLowerCase(), k as CapabilityKey]));
+
+/**
+ * The capability a model's evidence ref points to: the exact key, or the exact label shown in
+ * the input (models often cite what they read, e.g. "online shop / cart"), optionally followed by
+ * the shown value (": yes", " (woocommerce store)"). Anything else — invented keys such as
+ * "online_shop" — is null: unverifiable, never guessed.
+ */
+export function resolveCapabilityRef(ref: string): CapabilityKey | null {
+  const r = ref
+    .trim()
+    .toLowerCase()
+    .replace(/\s*\([^)]*\)\s*$/, '')
+    .replace(/\s*:\s*(yes|no)\b.*$/, '')
+    .trim();
+  if (r in CAPABILITY_LABELS) return r as CapabilityKey;
+  // "cart_checkout (online shop / cart)" — key with its label, as the input lists them.
+  const head = r.split(/\s+/)[0] ?? '';
+  if (head in CAPABILITY_LABELS) return head as CapabilityKey;
+  return KEY_BY_LABEL.get(r) ?? null;
+}
+
 export interface Capability {
   present: boolean;
   evidenceUrl?: string;

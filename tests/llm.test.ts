@@ -120,7 +120,9 @@ describe('digest', () => {
     expect(d.text).toContain(`${obsId} · verified · NO_VIEWPORT_META`);
     expect(d.text).toContain('Public email contacts: 2 (own-domain role addresses: 1, public mailboxes: 1)');
     expect(d.text).not.toMatch(/@/);
-    expect(d.text).toContain('- prices only on request: yes');
+    // Machine key first (what deep-analysis evidence must cite), then the human label.
+    expect(d.text).toContain('- price_on_request · prices only on request: yes');
+    expect(d.text).toContain('- online_booking · online booking: no');
     expect(d.injectionSuspected).toBe(false);
   });
 

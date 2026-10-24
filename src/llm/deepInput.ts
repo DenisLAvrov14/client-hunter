@@ -22,20 +22,27 @@ export const EXTRA_PAGE_MAX_CHARS = 3000;
 
 export const normalizeLink = (u: string) => u.split('#')[0]!.replace(/\/$/, '');
 
+// Not pages the model can usefully request: CDN/anti-scraping endpoints (Cloudflare email
+// protection is an anti-harvesting measure, never fetched) and documents or media, which the
+// extra-page reader skips as non-HTML anyway.
+const NOT_A_PAGE = /\/cdn-cgi\/|\.(pdf|docx?|xlsx?|pptx?|zip|rar|jpe?g|png|gif|webp|svg|mp4|mp3)(\?|$)/i;
+/** A page read with less main text than this is flagged: content may sit on its sub-pages. */
+const THIN_PAGE_CHARS = 200;
+
 export function buildDeepInput(db: Db, companyId: string, digestMaxChars: number, extra: ExtraPage[] = []): DeepInput | null {
   const digest = buildDigest(db, companyId, digestMaxChars);
   if (!digest) return null;
 
-  const pages = db.prepare('SELECT url, links_json FROM pages WHERE inspection_id = ?').all(digest.inspectionId) as {
-    url: string;
-    links_json: string | null;
-  }[];
+  const pages = db
+    .prepare(`SELECT url, links_json, length(trim(coalesce(main_text, ''))) AS chars FROM pages WHERE inspection_id = ? ORDER BY fetched_at, url`)
+    .all(digest.inspectionId) as { url: string; links_json: string | null; chars: number }[];
+  const thinPages = pages.filter((p) => p.chars < THIN_PAGE_CHARS).map((p) => p.url);
   const read = new Set([...pages.map((p) => normalizeLink(p.url)), ...extra.map((e) => normalizeLink(e.url))]);
   const knownLinks = new Map<string, string>();
   for (const p of pages) {
     for (const l of (p.links_json ? JSON.parse(p.links_json) : []) as PageLink[]) {
       const key = normalizeLink(l.url);
-      if (!read.has(key) && !knownLinks.has(key)) knownLinks.set(key, l.text);
+      if (!read.has(key) && !knownLinks.has(key) && !NOT_A_PAGE.test(key)) knownLinks.set(key, l.text);
     }
   }
 
@@ -68,6 +75,9 @@ export function buildDeepInput(db: Db, companyId: string, digestMaxChars: number
     '',
     `## Contact availability (code): ${contact?.contact_status ?? 'unknown'}${channelKinds.length ? ` · other channels: ${channelKinds.join(', ')}` : ''}`,
     '',
+    ...(thinPages.length
+      ? [`## Pages read but with almost no text (content may be on their sub-pages): ${thinPages.join(', ')}`, '']
+      : []),
     '## Known internal links (you may request up to 3 of these exact URLs in need_pages)',
     linkLines.length ? linkLines.join('\n') : '- none',
     ...(extraBlocks.length

@@ -121,6 +121,9 @@ function answer(verified: string, over: Partial<DeepResult> = {}): DeepResult {
       language: 'en',
       subject: 'Prices on your website',
       body: 'Hello Oak Stairs team,\n\nYour prices page asks customers to email their measurements for a price. A simple form that gives a rough estimate could help customers before they get in touch.\n\nI build tools like this (https://cryptovigil.net). Would a short outline be useful?',
+      opportunity_index: 0,
+      observation_index: 0,
+      framing: 'observation',
     },
     need_pages: [],
     ...over,
@@ -231,10 +234,18 @@ describe('validateDeep', () => {
     expect(validateDeep(a, input, ctx()).result.customer_journey[0]!.kind).toBe('fact');
   });
 
-  it('a capability the code sees as absent supports only an inference', () => {
+  it('a capability the code sees as absent supports only an inference ("there is no online booking")', () => {
     const a = answer(verified);
-    a.existing_capabilities = [{ text: 'Онлайн-брони нет', kind: 'fact', evidence: [{ type: 'capability', ref: 'online_booking', page_url: '' }] }];
-    expect(validateDeep(a, input, ctx()).result.existing_capabilities[0]!.kind).toBe('inference');
+    a.customer_journey = [{ text: 'Онлайн-брони нет', kind: 'fact', evidence: [{ type: 'capability', ref: 'online_booking', page_url: '' }] }];
+    expect(validateDeep(a, input, ctx()).result.customer_journey[0]!.kind).toBe('inference');
+  });
+
+  it('"the site already has X" with X absent is contradicted: never a fact, not even an inference', () => {
+    const a = answer(verified);
+    a.existing_capabilities = [{ text: 'Есть онлайн-запись', kind: 'fact', evidence: [{ type: 'capability', ref: 'online_booking', page_url: '' }] }];
+    const v = validateDeep(a, input, ctx());
+    expect(v.result.existing_capabilities[0]).toMatchObject({ kind: 'hypothesis', evidence: [] });
+    expect(v.feedback).toContain('code does not detect online_booking');
   });
 
   it('proposing what the site already has is not eligible; "pursue" without a grounded proposal becomes "maybe"', () => {
@@ -318,7 +329,7 @@ describe('analyzeCompany', () => {
   it('a draft that still breaks the copy rules after the retry is withheld (issues recorded)', async () => {
     const db = freshDb();
     const { companyId, verified } = setup(db);
-    const bad = answer(verified, { outreach: { language: 'en', subject: 'Hi', body: 'You lose 30% of customers!' } });
+    const bad = answer(verified, { outreach: { ...answer(verified).outreach, subject: 'Hi', body: 'You lose 30% of customers!' } });
     const out = await analyzeCompany(companyId, deps(db, new FakeLlm([bad, bad])));
     expect(out.status === 'analyzed' && out.meta.outreachIssues.length).toBeGreaterThan(0);
   });
@@ -394,7 +405,7 @@ describe('dossierMarkdown', () => {
     const db = freshDb();
     const { companyId, verified } = withContacts(db);
     const md = dossierMarkdown(db, config, companyId, answer(verified), meta(), 0);
-    expect(md).toContain('Доступность контакта: email');
+    expect(md).toContain('Доступность контакта: есть email (email)');
     expect(md).toContain('- email: info@oakstairs.co.uk — источник: https://www.oakstairs.co.uk/ · риск адреса: 🟢 low');
     expect(md).toContain('+441131234567 (0113 123 4567)');
     expect(md).toContain('**Риск обращения (отдельно от доступности):** 🟢 low — Компания (Ltd на сайте)');
@@ -411,13 +422,13 @@ describe('dossierMarkdown', () => {
     const db = freshDb();
     const { companyId, verified } = setup(db);
     const md = dossierMarkdown(db, config, companyId, answer(verified), meta({ outreachIssues: ['цифры в письме'] }), 0);
-    expect(md).toContain('⚠ Черновик не прошёл проверку правил и использовать его нельзя: цифры в письме');
+    expect(md).toContain('использовать его нельзя: цифры в письме');
   });
 
   it('model text with a code fence cannot break out of the draft block', () => {
     const db = freshDb();
     const { companyId, verified } = setup(db);
-    const a = answer(verified, { outreach: { language: 'en', subject: 'Hi', body: 'Hello\n```\n# Injected heading\n```' } });
+    const a = answer(verified, { outreach: { ...answer(verified).outreach, subject: 'Hi', body: 'Hello\n```\n# Injected heading\n```' } });
     const md = dossierMarkdown(db, config, companyId, a, meta(), 0);
     expect(md).toContain('````text\nSubject: Hi');
     expect(md).toMatch(/I won't contact you again\.\n````\n/);

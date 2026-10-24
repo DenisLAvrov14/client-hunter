@@ -59,8 +59,8 @@ export function deepInputHash(model: string, promptVersion: string, inputText: s
 const deepHeader = (language: string, mode: string) => `Analyse this company.\nOutreach draft: language=${language}, mode=${mode}.\n\n`;
 /** Schema and format overhead per call, on top of the prompt and the user message. */
 const SCHEMA_OVERHEAD_TOKENS = 1000;
-/** Typical answer size, for the dry-run estimate only; limits always use max_output_tokens. */
-const TYPICAL_OUTPUT_TOKENS = 3000;
+/** Typical answer size (first paid run: 4.5-7.4K incl. thinking), dry-run estimate only; limits always use max_output_tokens. */
+const TYPICAL_OUTPUT_TOKENS = 5500;
 
 function cachedAssessment(db: Db, companyId: string, inputHash: string): { payload_json: string; validation_json: string } | undefined {
   return db

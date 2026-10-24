@@ -17,7 +17,7 @@ import {
 import type { DeepMeta } from '../llm/deep.js';
 import type { DeepResult, StatementT } from '../llm/schemas.js';
 import { withOptOut } from '../outreach/copyCheck.js';
-import { channelLine, RISK_LABEL, UNCONFIRMED_EMAIL_NOTE } from './candidates.js';
+import { channelLines, RISK_LABEL, UNCONFIRMED_EMAIL_NOTE } from './candidates.js';
 
 const KIND_LABEL: Record<StatementT['kind'], string> = {
   fact: '✅ факт',
@@ -26,6 +26,18 @@ const KIND_LABEL: Record<StatementT['kind'], string> = {
   unknown: '❓ неизвестно',
 };
 const RECOMMENDATION_LABEL = { pursue: '🟢 стоит предложить', maybe: '🟡 возможно', drop: '⚪ не предлагать' } as const;
+// Russian labels for model/code enum values, so the dossier reads in one language. Risk classes
+// (low / review_required / high) stay as defined terms (docs/decisions.md).
+const EXISTS_LABEL: Record<string, string> = { no: 'нет', partially: 'частично', yes: 'да', unknown: 'неизвестно' };
+const SIZE_LABEL: Record<string, string> = { small: 'небольшой', medium: 'средний', large: 'большой' };
+const CONTACT_STATUS_LABEL: Record<string, string> = {
+  email: 'есть email',
+  form_only: 'только форма (email не найден)',
+  phone_or_messenger: 'только телефон или мессенджер',
+  none: 'контактов не найдено',
+};
+const MODE_LABEL: Record<string, string> = { offer: 'предложение', permission_request: 'запрос разрешения' };
+const FRAMING_LABEL: Record<string, string> = { observation: 'как наблюдение', question: 'как вопрос' };
 const PORTFOLIO: Record<string, string> = {
   pinpinpin: 'https://pinpinpin.it (Shopify, интерфейсы, каталоги)',
   cryptovigil: 'https://cryptovigil.net (бэкенд, API, уведомления, дашборды)',
@@ -100,7 +112,8 @@ export function dossierMarkdown(db: Db, config: Config, companyId: string, resul
   if (best) {
     lines.push(
       `### Лучшее предложение: ${best.title}`,
-      `${best.category === 'website_rescue' ? 'A · исправление сайта' : 'B · улучшение бизнеса'} · объём: ${best.project_size} · уже есть на сайте: ${best.already_exists}` +
+      `${best.category === 'website_rescue' ? 'A · исправление сайта' : 'B · улучшение бизнеса'} · объём: ${SIZE_LABEL[best.project_size] ?? best.project_size}` +
+        ` · уже есть на сайте: ${EXISTS_LABEL[best.already_exists] ?? best.already_exists}` +
         (best.already_exists_note ? ` (${best.already_exists_note})` : ''),
       '',
       '**Что видно на сайте:**',
@@ -122,25 +135,32 @@ export function dossierMarkdown(db: Db, config: Config, companyId: string, resul
     lines.push('### Другие варианты');
     others.forEach((o) => {
       const i = result.opportunities.indexOf(o);
-      lines.push(`- **${o.title}** — ${o.proposal} (уже есть: ${o.already_exists}${meta.eligible[i] ? '' : ' · ⚠ не подтверждено наблюдениями или уже есть'})`);
+      lines.push(
+        `- **${o.title}** — ${o.proposal} (уже есть: ${EXISTS_LABEL[o.already_exists] ?? o.already_exists}${meta.eligible[i] ? '' : ' · ⚠ не подтверждено наблюдениями или уже есть'})`,
+      );
     });
     lines.push('');
   }
   if (result.unknowns.length) lines.push('### Неизвестно', ...result.unknowns.map((u) => `- ${u}`), '');
 
-  lines.push('### Контакты', `Доступность контакта: ${contactStatus ?? 'не определена'}`);
+  lines.push('### Контакты', `Доступность контакта: ${contactStatus ? `${CONTACT_STATUS_LABEL[contactStatus] ?? contactStatus} (${contactStatus})` : 'не определена'}`);
   for (const e of emails) {
     lines.push(`- email: ${e.email}${e.is_freemail ? ' (публичная почта)' : ''} — источник: ${e.found_on_url} · риск адреса: ${RISK_LABEL[e.risk] ?? e.risk}`);
   }
   for (const e of unconfirmedEmails(db, companyId)) lines.push(`- email: ${e.email} — источник: ${e.found_on_url} · ${UNCONFIRMED_EMAIL_NOTE}`);
-  for (const ch of currentContactChannels(db, companyId)) lines.push(`- ${channelLine(ch)}`);
+  for (const l of channelLines(currentContactChannels(db, companyId))) lines.push(`- ${l}`);
   lines.push(
     `**Риск обращения (отдельно от доступности):** ${risk ? `${RISK_LABEL[risk.risk] ?? risk.risk} — ${risk.reason}` : 'не определён'}`,
     '',
     '### Черновик первого письма — ТОЛЬКО ДЛЯ ПРОСМОТРА, НЕ ОТПРАВЛЕНО',
   );
   if (meta.outreachIssues.length) {
-    lines.push(`⚠ Черновик не прошёл проверку правил и использовать его нельзя: ${meta.outreachIssues.join('; ')}`, '');
+    lines.push(`⚠ Черновик не прошёл проверку (правила текста или опора на доказательства), использовать его нельзя: ${meta.outreachIssues.join('; ')}`, '');
+  }
+  // What the draft rests on: the one observed statement it mentions, and how it presents it.
+  const basis = result.outreach.opportunity_index !== undefined ? result.opportunities[result.outreach.opportunity_index]?.observed[result.outreach.observation_index] : undefined;
+  if (basis) {
+    lines.push(`Основа письма: ${KIND_LABEL[basis.kind]}: ${basis.text} · подано ${FRAMING_LABEL[result.outreach.framing] ?? result.outreach.framing}`);
   }
   const draft = [
     `Subject: ${result.outreach.subject}`,
@@ -149,7 +169,7 @@ export function dossierMarkdown(db: Db, config: Config, companyId: string, resul
   ].join('\n');
   const fence = codeFence(draft);
   lines.push(
-    `Режим: ${market?.first_touch_mode ?? '?'} · язык: ${result.outreach.language}`,
+    `Режим: ${market ? `${MODE_LABEL[market.first_touch_mode] ?? market.first_touch_mode} (${market.first_touch_mode})` : '?'} · язык письма: ${result.outreach.language}`,
     '',
     `${fence}text`,
     draft,
@@ -160,7 +180,7 @@ export function dossierMarkdown(db: Db, config: Config, companyId: string, resul
       (meta.extraPages.length ? ` · дополнительно прочитаны: ${meta.extraPages.join(', ')}` : '') +
       (meta.skippedPages.length ? ` · не прочитаны: ${meta.skippedPages.map((s) => `${s.url} (${s.reason})`).join(', ')}` : ''),
   );
-  if (meta.issues.length) lines.push(`Замечания проверки кодом: ${meta.issues.join('; ')}`);
+  if (meta.issues.length) lines.push(`Технический журнал проверки кодом (на английском): ${meta.issues.join('; ')}`);
   lines.push('', '---', '');
   return lines.join('\n');
 }
