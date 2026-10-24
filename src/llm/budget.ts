@@ -32,6 +32,7 @@ export class Budget {
   private calls = 0;
   private spent = 0;
   private warned = false;
+  private readonly byPurpose = new Map<string, { calls: number; cost: number }>();
 
   constructor(
     private readonly db: Db,
@@ -53,6 +54,11 @@ export class Budget {
 
   get runCalls(): number {
     return this.calls;
+  }
+
+  /** Calls and cost of this run for one purpose (e.g. full analysis vs draft repair). */
+  runFor(purpose: string): { calls: number; cost: number } {
+    return this.byPurpose.get(purpose) ?? { calls: 0, cost: 0 };
   }
 
   /** Throws before a call that could break a run or monthly limit. `worstCaseUsd` = full input + max output. */
@@ -107,6 +113,8 @@ export class Budget {
       );
     this.calls++;
     this.spent += cost;
+    const p = this.runFor(args.purpose);
+    this.byPurpose.set(args.purpose, { calls: p.calls + 1, cost: p.cost + cost });
     return { id, cost };
   }
 }

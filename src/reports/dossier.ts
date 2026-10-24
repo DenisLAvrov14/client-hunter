@@ -37,6 +37,7 @@ const CONTACT_STATUS_LABEL: Record<string, string> = {
   phone_or_messenger: 'только телефон или мессенджер',
   none: 'контактов не найдено',
 };
+const REPAIR_LABEL: Record<string, string> = { repaired: 'черновик исправлен', failed: 'не удался', skipped: 'не выполнен' };
 const MODE_LABEL: Record<string, string> = { offer: 'предложение', permission_request: 'запрос разрешения' };
 const FRAMING_LABEL: Record<string, string> = { observation: 'как наблюдение', question: 'как вопрос' };
 const PORTFOLIO: Record<string, string> = {
@@ -174,6 +175,7 @@ export function dossierMarkdown(db: Db, config: Config, companyId: string, resul
   if (meta.outreachIssues.length) {
     lines.push(`⚠ Черновик не прошёл проверку (правила текста или опора на доказательства), использовать его нельзя: ${meta.outreachIssues.join('; ')}`, '');
   }
+  if (meta.draftRepair === 'repaired') lines.push('Черновик исправлен отдельным небольшим запросом (анализ не перегенерировался) и проверен заново.');
   // What the draft rests on: the one observed statement it mentions, and how it presents it.
   const basis = result.outreach.opportunity_index !== undefined ? result.opportunities[result.outreach.opportunity_index]?.observed[result.outreach.observation_index] : undefined;
   if (basis) {
@@ -194,6 +196,10 @@ export function dossierMarkdown(db: Db, config: Config, companyId: string, resul
     '',
     '### Проверка',
     `Вызовов API: ${meta.calls} · стоимость: $${cost.toFixed(4)}` +
+      (meta.analysisCalls !== undefined
+        ? ` (анализ: ${meta.analysisCalls} · $${(meta.analysisCost ?? 0).toFixed(4)}; ремонт черновика: ${meta.repairCalls ?? 0} · $${(meta.repairCost ?? 0).toFixed(4)}` +
+          `${meta.draftRepair && meta.draftRepair !== 'not_needed' ? ` — ${REPAIR_LABEL[meta.draftRepair] ?? meta.draftRepair}` : ''})`
+        : '') +
       (meta.extraPages.length ? ` · дополнительно прочитаны: ${meta.extraPages.join(', ')}` : '') +
       (meta.skippedPages.length ? ` · не прочитаны: ${meta.skippedPages.map((s) => `${s.url} (${s.reason})`).join(', ')}` : ''),
   );

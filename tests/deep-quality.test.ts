@@ -100,8 +100,9 @@ describe('outreach grounding (first run: drafts stated inferences as seen, or pi
     const onInference = a1Answer();
     onInference.outreach = { ...onInference.outreach, observation_index: 0 };
     const v = validateDeep(onInference, input, c);
-    expect(v.retry).toBe(true);
-    expect(v.feedback).toContain('is only an inference: the draft must ask about it');
+    // A draft-only problem no longer regenerates the whole analysis: it goes to the draft repair.
+    expect(v.retry).toBe(false);
+    expect(v.draftFeedback.join(' ')).toContain('is only an inference: the draft must ask about it');
     expect(finalizeDeep(v).outreachIssues.join('\n')).toContain('черновик подаёт как наблюдение то, что является только выводом');
   });
 
@@ -131,8 +132,7 @@ describe('outreach grounding (first run: drafts stated inferences as seen, or pi
     const { input, findings } = inspected(db, ppSite);
     const c = ctx('potolok-pro.kz', 'PRO-POTOLOK', { expectedLanguage: 'ru', mode: 'permission_request' });
     const v = validateDeep(ppAnswer(findings[0]!), input, c);
-    expect(v.retry).toBe(true);
-    expect(v.feedback).toContain('Write the draft about the best opportunity');
+    expect(v.draftFeedback.join(' ')).toContain('Write the draft about the best opportunity');
     const final = finalizeDeep(v);
     expect(final.outreachIssues.join('\n')).toContain('черновик предлагает «Исправить размер кнопок для телефона», а выбранное предложение — «Онлайн-запись');
     // Even pointed at the right proposal, its basis is an inference: only a question is acceptable.
@@ -157,7 +157,7 @@ describe('outreach grounding (first run: drafts stated inferences as seen, or pi
     r.opportunities = [r.opportunities[0]!, second];
     r.best_opportunity_index = 1;
     r.outreach = { ...r.outreach, opportunity_index: 1 };
-    const v = finalizeDeep({ result: r, issues: [], retry: false, feedback: '', eligible: [true, false], draftRuleIssues: [], outreachIssues: [], needPages: [] });
+    const v = finalizeDeep({ result: r, issues: [], retry: false, feedback: '', eligible: [true, false], draftRuleIssues: [], draftFeedback: [], outreachIssues: [], needPages: [] });
     expect(v.result.best_opportunity_index).toBe(0);
     expect(v.outreachIssues.join('\n')).toContain('черновик предлагает «Второе предложение»');
     expect(draftGrounding(v.result, [true, false]).length).toBeGreaterThan(0);

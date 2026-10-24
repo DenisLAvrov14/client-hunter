@@ -15,12 +15,13 @@ import { initialSettings, maxOutputTokensOf, nextSettings, TRUNCATION_FEEDBACK }
 import { estimateInputTokens, type Budget } from './budget.js';
 import { LlmError, type LlmClient, type LlmUsage } from './client.js';
 import { buildDeepInput, EXTRA_PAGE_MAX_CHARS, type DeepInput, type ExtraPage } from './deepInput.js';
-import { finalizeDeep, MAX_EXTRA_PAGES, validateDeep, type DeepContext, type DeepValidation } from './deepValidate.js';
+import { checkOutreach, finalizeDeep, MAX_EXTRA_PAGES, validateDeep, type DeepContext, type DeepValidation } from './deepValidate.js';
+import { DRAFT_PROMPT, repairDraft, repairWorstUsd, type DraftRepairStatus } from './draftRepair.js';
 import { DeepResult } from './schemas.js';
 
 export const DEEP_PROMPT = readFileSync(fileURLToPath(new URL('./prompts/deep.md', import.meta.url)), 'utf8');
-/** Changes whenever the prompt text changes, so edited prompts are never served from the cache. */
-export const DEEP_PROMPT_VERSION = `deep-${createHash('sha256').update(DEEP_PROMPT).digest('hex').slice(0, 12)}`;
+/** Changes whenever either prompt changes (analysis or draft repair), so edits are never served from the cache. */
+export const DEEP_PROMPT_VERSION = `deep-${createHash('sha256').update(`${DEEP_PROMPT}\n${DRAFT_PROMPT}`).digest('hex').slice(0, 12)}`;
 
 export interface DeepMeta {
   extraPages: string[];
@@ -33,6 +34,12 @@ export interface DeepMeta {
   truncationRetries?: number;
   /** The recommendation still contradicts its stated blockers or the evidence (operator-facing). */
   recommendationIssues?: string[];
+  /** Full-analysis calls and cost (purpose "deep"), apart from the draft repair (purpose "deep_draft"). */
+  analysisCalls?: number;
+  analysisCost?: number;
+  draftRepair?: DraftRepairStatus;
+  repairCalls?: number;
+  repairCost?: number;
 }
 
 export type DeepOutcome =
@@ -82,8 +89,10 @@ export interface DeepEstimate {
   inputTokens: number;
   /** One call per company with a typical answer. */
   estimateUsd: number;
-  /** Every retry and the second pass with the maximum of extra pages, each at max output. */
+  /** Every retry and the second pass with the maximum of extra pages, each at max output, plus a draft repair. */
   worstUsd: number;
+  /** Part of worstUsd: one draft repair per company, at its max output. */
+  repairWorstUsd: number;
 }
 
 /** Dry run of analyzeCompany for a batch: reads the database only, never calls the API. */
@@ -91,7 +100,8 @@ export function estimateDeepRun(db: Db, config: Config, companyIds: string[], fo
   const stage = config.llm.stages.deep;
   const p = config.llm.prices[stage.model]!;
   const extraTokens = estimateInputTokens('x'.repeat(MAX_EXTRA_PAGES * EXTRA_PAGE_MAX_CHARS));
-  const est: DeepEstimate = { first: null, toAnalyze: 0, cached: 0, noData: 0, inputTokens: 0, estimateUsd: 0, worstUsd: 0 };
+  const est: DeepEstimate = { first: null, toAnalyze: 0, cached: 0, noData: 0, inputTokens: 0, estimateUsd: 0, worstUsd: 0, repairWorstUsd: 0 };
+  const repairWorst = repairWorstUsd(config);
   for (const id of companyIds) {
     const company = db.prepare('SELECT market FROM companies WHERE id = ?').get(id) as { market: string } | undefined;
     const market = company && config.markets.get(company.market as MarketCode);
@@ -111,7 +121,8 @@ export function estimateDeepRun(db: Db, config: Config, companyIds: string[], fo
     est.estimateUsd += (tokens * p.input + TYPICAL_OUTPUT_TOKENS * p.output) / 1_000_000;
     // Two passes of two attempts; the second pass also carries the extra pages (and feedback, ~overhead).
     const worstIn = 2 * (tokens + SCHEMA_OVERHEAD_TOKENS) + 2 * (tokens + extraTokens + SCHEMA_OVERHEAD_TOKENS);
-    est.worstUsd += (worstIn * p.input + 4 * maxOutputTokensOf(stage) * p.output) / 1_000_000;
+    est.worstUsd += (worstIn * p.input + 4 * maxOutputTokensOf(stage) * p.output) / 1_000_000 + repairWorst;
+    est.repairWorstUsd += repairWorst;
   }
   return est;
 }
@@ -216,6 +227,28 @@ export async function analyzeCompany(companyId: string, deps: DeepDeps): Promise
     }
   }
   validation = finalizeDeep(validation);
+  const analysisCalls = calls;
+  const analysisCost = cost;
+
+  // The analysis is final. A failing draft gets ONE small repair request instead of a full retry;
+  // whatever happens to it, the valid dossier is kept (the draft is then marked unusable).
+  let draftRepair: DraftRepairStatus = 'not_needed';
+  let repairCalls = 0;
+  let repairCost = 0;
+  if (validation.outreachIssues.length && validation.result.recommendation !== 'drop') {
+    const problems = checkOutreach(structuredClone(validation.result), validation.eligible, ctx(false)).fixes;
+    const rep = await repairDraft(validation.result, validation.eligible, ctx(false), problems, { config, llm, budget, companyId });
+    draftRepair = rep.status;
+    repairCalls = rep.calls;
+    repairCost = rep.cost;
+    calls += rep.calls;
+    cost += rep.cost;
+    if (rep.status === 'repaired' && rep.result) {
+      validation = { ...validation, result: rep.result, outreachIssues: [], issues: [...validation.issues, 'draft repaired by a separate small request', ...rep.notes] };
+    } else {
+      validation = { ...validation, outreachIssues: [...validation.outreachIssues, rep.reason ?? 'ремонт черновика не удался'] };
+    }
+  }
 
   const meta: DeepMeta = {
     extraPages,
@@ -226,6 +259,11 @@ export async function analyzeCompany(companyId: string, deps: DeepDeps): Promise
     calls,
     truncationRetries,
     recommendationIssues: validation.recommendationIssues ?? [],
+    analysisCalls,
+    analysisCost,
+    draftRepair,
+    repairCalls,
+    repairCost,
   };
   db.prepare(
     `INSERT INTO assessments (id, company_id, inspection_id, stage, model, prompt_version, input_hash, decision, payload_json,

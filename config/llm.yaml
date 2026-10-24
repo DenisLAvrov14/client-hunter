@@ -11,12 +11,15 @@ stages:
       max_output_tokens: 5000
   deep:                          # stage C (npm run deep): shortlisted companies only, up to 4 calls each
     model: claude-haiku-5-5
-    effort: medium
-    max_output_tokens: 8000      # second paid run: A1 hit 8000 twice (thinking is billed as output)
+    effort: medium               # kept: low would cut thinking (40-65% of output so far), not yet A/B-tested for quality
+    max_output_tokens: 10000     # was 8000: A1 hit it in 3 of 5 attempts; billed per token used, so typical cost is unchanged
     digest_max_chars: 16000
-    on_truncation:               # ONE retry per company, asked to be brief; kept for the rest of its analysis
+    on_truncation:               # fallback only: ONE retry per company, asked to be brief; kept for the rest of its analysis
       effort: low                # less thinking, which is billed as output
       max_output_tokens: 12000
+    draft_repair:                # ONE small request regenerating only a failing outreach draft (never the whole dossier)
+      effort: low
+      max_output_tokens: 2000
 
 request_timeout_ms: 60000
 # No SDK retries: every HTTP request is one budgeted attempt; stages retry transient errors

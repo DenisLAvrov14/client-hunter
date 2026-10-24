@@ -84,6 +84,16 @@ export function normalizeGreeting(body: string, language: string): string {
   });
 }
 
+/**
+ * Removes lines that repeat one of our own opt-out sentences — the model must not write it (code
+ * appends it, spec 10.3). Only lines containing the configured opt-out text are dropped.
+ */
+export function stripOptOut(rules: CopyRulesConfig, body: string): string {
+  const optOuts = Object.values(rules.opt_out).map((o) => o.slice(0, 25));
+  const kept = body.split('\n').filter((line) => !optOuts.some((o) => line.includes(o)));
+  return kept.length === body.split('\n').length ? body : kept.join('\n').trim();
+}
+
 /** The final text shown to the operator: draft + opt-out line added by code (spec 10.3). */
 export function withOptOut(rules: CopyRulesConfig, body: string, language: string): string {
   const optOut = rules.opt_out[language] ?? rules.opt_out.en ?? '';

@@ -2,7 +2,7 @@
 // labels against the digest and downgrades anything the evidence does not carry.
 import type { CopyRulesConfig } from '../config/schema.js';
 import { resolveCapabilityRef } from '../inspect/capabilities.js';
-import { checkDraft, normalizeGreeting } from '../outreach/copyCheck.js';
+import { checkDraft, normalizeGreeting, stripOptOut } from '../outreach/copyCheck.js';
 import { normalizeLink, type DeepInput } from './deepInput.js';
 import type { DeepResult, StatementT } from './schemas.js';
 import { DUPLICATES, NUMBERS_IN_CLAIM, quoteSource } from './validate.js';
@@ -30,6 +30,8 @@ export interface DeepValidation {
   eligible: boolean[];
   /** Copy-rule problems of the draft (config/copy-rules.yaml). */
   draftRuleIssues: string[];
+  /** Draft-only problems (English feedback): repaired by the small draft request, not a full retry. */
+  draftFeedback: string[];
   /** Copy-rule and grounding problems; non-empty after the final attempt means the draft is unusable. */
   outreachIssues: string[];
   /** Validated URLs to read before the second pass. */
@@ -163,25 +165,10 @@ export function validateDeep(raw: DeepResult, input: DeepInput, ctx: DeepContext
     fixable.push('"pursue" needs at least one opportunity grounded in observed evidence. Otherwise answer "maybe" or "drop" — that is a fine result.');
   }
 
-  // Cosmetic only ("Здравствуйте!" → "Здравствуйте."): fixed here instead of a paid retry; the
-  // draft is then checked as usual. Claims, offers and any other "!" are never touched.
-  const greeting = normalizeGreeting(result.outreach.body, result.outreach.language);
-  if (greeting !== result.outreach.body) {
-    issues.push('draft: "!" after the greeting replaced (formatting only)');
-    result.outreach.body = greeting;
-  }
-  const draftRuleIssues = checkDraft(ctx.rules, {
-    subject: result.outreach.subject,
-    body: result.outreach.body,
-    language: result.outreach.language,
-    expectedLanguage: ctx.expectedLanguage,
-    mode: ctx.mode,
-    companyDomain: ctx.companyDomain,
-    companyName: ctx.companyName,
-  });
-  if (draftRuleIssues.length) fixable.push(`The outreach draft breaks these rules: ${draftRuleIssues.join('; ')}. Rewrite it.`);
-  const grounding = draftGrounding(result, eligible);
-  fixable.push(...grounding.map((g) => g.fix));
+  // The draft is checked apart from the analysis: a draft-only problem never regenerates the
+  // whole dossier — it is left to the small draft repair after finalize (src/llm/draftRepair.ts).
+  const draft = checkOutreach(result, eligible, ctx);
+  issues.push(...draft.notes);
   fixable.push(...recommendationConsistency(result, eligible).map((r) => r.fix));
 
   for (const [where, text] of russianTexts(result)) {
@@ -200,15 +187,65 @@ export function validateDeep(raw: DeepResult, input: DeepInput, ctx: DeepContext
     }
   }
 
+  // A full retry regenerates the draft too, so its feedback includes the draft's problems.
+  const allFixes = [...new Set([...fixable, ...draft.fixes])];
   return {
     result,
     issues,
     retry: fixable.length > 0,
-    feedback: fixable.length ? `Your previous answer had problems:\n- ${[...new Set(fixable)].join('\n- ')}\nAnswer again, fixing them.` : '',
+    feedback: fixable.length ? `Your previous answer had problems:\n- ${allFixes.join('\n- ')}\nAnswer again, fixing them.` : '',
+    draftFeedback: draft.fixes,
     eligible,
-    draftRuleIssues,
-    outreachIssues: [...draftRuleIssues, ...grounding.map((g) => g.issue)],
+    draftRuleIssues: draft.draftRuleIssues,
+    outreachIssues: [...draft.draftRuleIssues, ...draft.groundingIssues],
     needPages,
+  };
+}
+
+export type DraftContext = Pick<DeepContext, 'rules' | 'expectedLanguage' | 'mode' | 'companyDomain' | 'companyName'>;
+
+export interface OutreachCheck {
+  draftRuleIssues: string[];
+  groundingIssues: string[];
+  /** Feedback for the model (English), for the draft repair or a full retry. */
+  fixes: string[];
+  /** What was fixed locally (formatting only). */
+  notes: string[];
+}
+
+/**
+ * All checks of the draft: safe local fixes first (formatting only — never a claim, offer or any
+ * word of substance), then the copy rules and the evidence grounding. Mutates result.outreach.body
+ * for the local fixes. Used for the model's draft and again for a repaired one.
+ */
+export function checkOutreach(result: DeepResult, eligible: boolean[], ctx: DraftContext): OutreachCheck {
+  const notes: string[] = [];
+  const o = result.outreach;
+  const greeting = normalizeGreeting(o.body, o.language);
+  if (greeting !== o.body) {
+    notes.push('draft: "!" after the greeting replaced (formatting only)');
+    o.body = greeting;
+  }
+  const withoutOptOut = stripOptOut(ctx.rules, o.body);
+  if (withoutOptOut !== o.body) {
+    notes.push('draft: model-written opt-out line removed (code adds it)');
+    o.body = withoutOptOut;
+  }
+  const draftRuleIssues = checkDraft(ctx.rules, {
+    subject: o.subject,
+    body: o.body,
+    language: o.language,
+    expectedLanguage: ctx.expectedLanguage,
+    mode: ctx.mode,
+    companyDomain: ctx.companyDomain,
+    companyName: ctx.companyName,
+  });
+  const grounding = draftGrounding(result, eligible);
+  return {
+    draftRuleIssues,
+    groundingIssues: grounding.map((g) => g.issue),
+    fixes: [...(draftRuleIssues.length ? [`The outreach draft breaks these rules: ${draftRuleIssues.join('; ')}. Rewrite it.`] : []), ...grounding.map((g) => g.fix)],
+    notes,
   };
 }
 

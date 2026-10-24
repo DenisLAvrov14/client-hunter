@@ -82,7 +82,7 @@ describe('truncated answers (A1 Designs: two identical requests cut off at 8000 
   it('settings after a truncation: once, never identical; without on_truncation no retry at all', () => {
     const stage = config.llm.stages.deep;
     const first = initialSettings(stage);
-    expect(first).toEqual({ effort: 'medium', maxOutputTokens: 8000, afterTruncation: false });
+    expect(first).toEqual({ effort: 'medium', maxOutputTokens: config.llm.stages.deep.max_output_tokens, afterTruncation: false });
     const second = nextSettings(stage, first, truncated());
     expect(second).toEqual({ effort: 'low', maxOutputTokens: 12000, afterTruncation: true });
     expect(nextSettings(stage, second!, truncated())).toBeNull();
@@ -99,7 +99,7 @@ describe('truncated answers (A1 Designs: two identical requests cut off at 8000 
     const out = await analyzeCompany(companyId, { db, config, llm, budget: new Budget(db, config), fetcher: noFetch });
     expect(out).toMatchObject({ status: 'failed' });
     expect(llm.requests.map((r) => [r.effort, r.maxOutputTokens])).toEqual([
-      ['medium', 8000],
+      ['medium', config.llm.stages.deep.max_output_tokens],
       ['low', 12000],
     ]);
     expect(llm.requests[1]!.user).toContain(TRUNCATION_FEEDBACK);
@@ -123,9 +123,9 @@ describe('truncated answers (A1 Designs: two identical requests cut off at 8000 
     const db = freshDb();
     const { companyId } = inspected(db, a1Site);
     const p = config.llm.prices[config.llm.stages.deep.model]!;
-    // Room for exactly the first attempt's worst case (the budget's own input estimate, 8000 out);
+    // Room for exactly the first attempt's worst case (the budget's own input estimate, base output limit);
     // after its real cost is spent, the 12000-token recovery's worst case no longer fits.
-    const firstWorst = (estimateDeepRun(db, config, [companyId]).inputTokens * p.input + 8000 * p.output) / 1e6;
+    const firstWorst = (estimateDeepRun(db, config, [companyId]).inputTokens * p.input + config.llm.stages.deep.max_output_tokens * p.output) / 1e6;
     const tight: Config = { ...config, limits: { ...config.limits, max_llm_cost_usd_per_run: firstWorst + 0.0001 } };
     const llm = new FakeLlm([truncated(), a1Answer()]);
     await expect(analyzeCompany(companyId, { db, config: tight, llm, budget: new Budget(db, tight), fetcher: noFetch })).rejects.toThrow(BudgetExceededError);

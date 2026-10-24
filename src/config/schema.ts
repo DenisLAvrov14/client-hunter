@@ -76,6 +76,8 @@ const LlmStage = z
     digest_max_chars: z.number().int().min(1000).max(60000),
     /** Settings for the ONE retry after an answer cut off at max_output_tokens; absent = no retry. */
     on_truncation: z.strictObject({ effort: Effort, max_output_tokens: z.number().int().min(256).max(64000) }).optional(),
+    /** Stage C: ONE small request that regenerates only a failing outreach draft; absent = no repair. */
+    draft_repair: z.strictObject({ effort: Effort, max_output_tokens: z.number().int().min(256).max(16000) }).optional(),
   })
   .refine((s) => !s.on_truncation || s.on_truncation.max_output_tokens >= s.max_output_tokens, {
     message: 'on_truncation.max_output_tokens must not be lower than max_output_tokens',

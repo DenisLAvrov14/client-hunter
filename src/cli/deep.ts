@@ -80,7 +80,8 @@ if (dryRun) {
   process.stdout.write(
     `Компаний: ${companies.length} · к анализу: ${est.toAnalyze} · из кэша (бесплатно): ${est.cached} · нет данных инспекции: ${est.noData}` +
       ` · ${stage.model} · промпт ${DEEP_PROMPT_VERSION}\n` +
-      `Вход ≈ ${est.inputTokens} токенов · оценка ≈ $${est.estimateUsd.toFixed(4)} (максимум ~$${est.worstUsd.toFixed(4)} при всех повторах и доп. страницах)` +
+      `Вход ≈ ${est.inputTokens} токенов · оценка ≈ $${est.estimateUsd.toFixed(4)} (максимум ~$${est.worstUsd.toFixed(4)} при всех повторах и доп. страницах,` +
+      ` в т. ч. ремонт черновиков до $${est.repairWorstUsd.toFixed(4)})` +
       ` · лимит на запуск $${config.limits.max_llm_cost_usd_per_run} · API не вызывался\n`,
   );
   db.close();
@@ -136,7 +137,9 @@ for (const [i, c] of companies.entries()) {
 
 const summary =
   `Компаний: ${companies.length} · стоит предложить: ${tally.pursue} · возможно: ${tally.maybe} · не предлагать: ${tally.drop} · ошибок: ${tally.failed}` +
-  ` · вызовов API: ${budget.runCalls} · стоимость: $${budget.runSpent.toFixed(4)} · модель ${stage.model} · промпт ${DEEP_PROMPT_VERSION}`;
+  ` · вызовов API: ${budget.runCalls} · стоимость: $${budget.runSpent.toFixed(4)}` +
+  ` (анализ: ${budget.runFor('deep').calls} · $${budget.runFor('deep').cost.toFixed(4)}; ремонт черновиков: ${budget.runFor('deep_draft').calls} · $${budget.runFor('deep_draft').cost.toFixed(4)})` +
+  ` · модель ${stage.model} · промпт ${DEEP_PROMPT_VERSION}`;
 const file = writeDossiers(config.app.data_dir, sections, summary);
 process.stdout.write(`\n${summary}\nЗа месяц: $${budget.monthSpent().toFixed(4)}\nДосье: ${file}\n`);
 db.close();
