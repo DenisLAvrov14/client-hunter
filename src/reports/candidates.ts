@@ -2,6 +2,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { MarketCode } from '../config/schema.js';
 import type { Db } from '../db/connection.js';
+import { currentContactChannels, unconfirmedEmails, type ContactChannelRow } from '../db/repo.js';
 import type { Capabilities } from '../inspect/capabilities.js';
 
 interface CompanyReportRow {
@@ -32,6 +33,7 @@ interface ObservationRow {
 interface RiskRow {
   email: string | null;
   is_freemail: number | null;
+  found_on_url: string | null;
   risk: string;
   reason: string;
   recipient_type: string;
@@ -43,6 +45,10 @@ export interface CompanyReport extends CompanyReportRow {
   recipientRisk: RiskRow | null;
   /** Per-address refinements, lowest risk first. */
   emailRisks: RiskRow[];
+  /** Current non-email channels (form page, phone, WhatsApp, Telegram), see currentContactChannels. */
+  channels: ContactChannelRow[];
+  /** Emails from earlier inspections whose page was not re-checked by the latest successful one. */
+  unconfirmedEmails: { email: string; found_on_url: string }[];
   capabilities: string[];
 }
 
@@ -85,18 +91,20 @@ export function buildCandidatesReport(db: Db, market: MarketCode): CandidatesRep
       recipientRisk:
         (db
           .prepare(
-            `SELECT NULL AS email, NULL AS is_freemail, r.risk, r.reason, r.recipient_type FROM outreach_risk r
+            `SELECT NULL AS email, NULL AS is_freemail, NULL AS found_on_url, r.risk, r.reason, r.recipient_type FROM outreach_risk r
              WHERE r.company_id = ? AND r.inspection_id IS ? AND r.contact_id IS NULL AND r.rules_version != ?
              ORDER BY r.created_at DESC LIMIT 1`,
           )
           .get(c.id, c.last_inspection_id, LEGACY_NO_EMAIL_RULES) as RiskRow | undefined) ?? null,
       emailRisks: db
         .prepare(
-          `SELECT k.email, k.is_freemail, r.risk, r.reason, r.recipient_type FROM outreach_risk r
+          `SELECT k.email, k.is_freemail, k.found_on_url, r.risk, r.reason, r.recipient_type FROM outreach_risk r
            JOIN contacts k ON k.id = r.contact_id
            WHERE r.company_id = ? AND r.inspection_id IS ? ORDER BY ${RISK_ORDER}`,
         )
         .all(c.id, c.last_inspection_id) as RiskRow[],
+      channels: currentContactChannels(db, c.id),
+      unconfirmedEmails: unconfirmedEmails(db, c.id),
       capabilities: caps ? Object.entries(caps.flags).filter(([, v]) => v.present).map(([k]) => k) : [],
     };
   });
@@ -125,7 +133,7 @@ function csvCell(v: string | null | undefined): string {
 export function toCsv(report: CandidatesReport): string {
   const header = [
     'domain', 'name', 'city', 'segment', 'platform', 'entity', 'outreach_risk', 'contact_status',
-    'best_email', 'best_email_risk', 'verified', 'likely', 'capabilities', 'website',
+    'best_email', 'best_email_risk', 'other_channels', 'verified', 'likely', 'capabilities', 'website',
   ];
   const rows = report.companies.map((c) =>
     [
@@ -139,6 +147,7 @@ export function toCsv(report: CandidatesReport): string {
       c.contact_status ?? '',
       c.emailRisks[0]?.email ?? '',
       c.emailRisks[0]?.risk ?? '',
+      c.channels.map((ch) => `${ch.channel}:${ch.value}${ch.uncertain || !ch.confirmed ? '?' : ''}`).join(' '),
       c.observations.filter((o) => o.status === 'verified').map((o) => o.code).join(' '),
       c.observations.filter((o) => o.status === 'likely').map((o) => o.code).join(' '),
       c.capabilities.join(' '),
@@ -149,6 +158,20 @@ export function toCsv(report: CandidatesReport): string {
   );
   return [header.join(','), ...rows].join('\n') + '\n';
 }
+
+const CHANNEL_LABEL: Record<string, string> = { form: 'форма', phone: 'телефон', whatsapp: 'WhatsApp', telegram: 'Telegram' };
+
+/** "телефон: +441614960000 (0161 496 0000) — источник: https://…" plus uncertainty / not re-checked marks. */
+export function channelLine(ch: ContactChannelRow): string {
+  const shown = ch.channel === 'phone' && ch.display && ch.display !== ch.value ? `${ch.value} (${ch.display})` : ch.value;
+  const marks = [
+    ch.uncertain && ch.note ? `⚠ ${ch.note}` : '',
+    ch.confirmed ? '' : '⚠ не подтверждён последней проверкой (страница-источник не загружалась)',
+  ].filter(Boolean);
+  return `${CHANNEL_LABEL[ch.channel] ?? ch.channel}: ${shown} — источник: ${ch.source_url}${marks.length ? ` · ${marks.join(' · ')}` : ''}`;
+}
+
+export const UNCONFIRMED_EMAIL_NOTE = '⚠ не подтверждён последней проверкой (страница-источник не загружалась)';
 
 const RISK_LABEL: Record<string, string> = { low: '🟢 low', review_required: '🟡 review_required', high: '🔴 high' };
 
@@ -190,7 +213,15 @@ export function toMarkdown(report: CandidatesReport, market: MarketCode, generat
     );
     lines.push(`Доступность контакта: ${c.contact_status ?? 'не определена (проверка до миграции 004)'}`);
     for (const r of c.emailRisks) {
-      lines.push(`Email: ${r.email}${r.is_freemail ? ' (публичная почта)' : ''} · риск адреса: ${RISK_LABEL[r.risk] ?? r.risk} — ${r.reason}`);
+      lines.push(
+        `- email: ${r.email}${r.is_freemail ? ' (публичная почта)' : ''} — источник: ${r.found_on_url ?? '—'}` +
+          ` · риск адреса: ${RISK_LABEL[r.risk] ?? r.risk} — ${r.reason}`,
+      );
+    }
+    for (const e of c.unconfirmedEmails) lines.push(`- email: ${e.email} — источник: ${e.found_on_url} · ${UNCONFIRMED_EMAIL_NOTE}`);
+    for (const ch of c.channels) lines.push(`- ${channelLine(ch)}`);
+    if (c.emailRisks.length === 0 && c.unconfirmedEmails.length === 0 && c.channels.length === 0) {
+      lines.push('- каналов связи на сайте не найдено');
     }
     lines.push('');
     for (const o of c.observations) {

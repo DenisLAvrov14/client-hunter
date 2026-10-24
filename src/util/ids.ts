@@ -22,6 +22,7 @@ export const ID_PREFIXES = {
   inspection: 'ins',
   outreachRisk: 'ork',
   assessment: 'asm',
+  contactChannel: 'chn',
 } as const;
 
 export type IdKind = keyof typeof ID_PREFIXES;

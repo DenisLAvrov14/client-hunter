@@ -9,7 +9,13 @@ import { companiesForReinspection } from '../src/db/repo.js';
 describe('migrate', () => {
   it('creates all spec tables and is idempotent', () => {
     const db = openDb(':memory:');
-    expect(migrate(db)).toEqual(['001_init.sql', '002_opportunities.sql', '003_assessments.sql', '004_contact_status.sql']);
+    expect(migrate(db)).toEqual([
+      '001_init.sql',
+      '002_opportunities.sql',
+      '003_assessments.sql',
+      '004_contact_status.sql',
+      '005_contact_channels.sql',
+    ]);
     expect(migrate(db)).toEqual([]);
 
     const tables = db
@@ -36,6 +42,7 @@ describe('migrate', () => {
         'inspections',
         'outreach_risk',
         'assessments',
+        'contact_channels',
         'schema_migrations',
       ]),
     );

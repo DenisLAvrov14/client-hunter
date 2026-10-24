@@ -2,6 +2,8 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Db } from '../db/connection.js';
+import { currentContactChannels, latestSuccessfulInspection, unconfirmedEmails } from '../db/repo.js';
+import { channelLine, UNCONFIRMED_EMAIL_NOTE } from './candidates.js';
 import { SAMPLE_GROUP_LABELS, type SampleGroup } from '../llm/sample.js';
 import type { ScreenResult } from '../llm/schemas.js';
 import type { OpportunityCheck } from '../llm/validate.js';
@@ -80,17 +82,17 @@ export function buildScreeningReport(db: Db, refs: ScreenedRef[], meta: { runCos
     const p = JSON.parse(r.payload_json) as ScreenResult;
     const v = JSON.parse(r.validation_json) as { opportunities: OpportunityCheck[]; issues: string[] };
     const g = groups.get(r.id);
+    // Contacts and risk come from the latest SUCCESSFUL inspection: a failed one says nothing about them.
+    const lastOk = latestSuccessfulInspection(db, r.id);
     // Recipient-level risk only (contact_id NULL, rules from 2026-10-23.2); availability is separate.
     const risk = db
       .prepare(
         `SELECT risk, reason FROM outreach_risk WHERE company_id = ? AND contact_id IS NULL AND rules_version != '2026-10-23.1'
-           AND inspection_id = (SELECT last_inspection_id FROM companies WHERE id = ?) LIMIT 1`,
+           AND inspection_id IS ? LIMIT 1`,
       )
-      .get(r.id, r.id) as { risk: string; reason: string } | undefined;
+      .get(r.id, lastOk) as { risk: string; reason: string } | undefined;
     const contactStatus = (
-      db.prepare('SELECT i.contact_status FROM inspections i JOIN companies c ON c.last_inspection_id = i.id WHERE c.id = ?').get(r.id) as
-        | { contact_status: string | null }
-        | undefined
+      db.prepare('SELECT contact_status FROM inspections WHERE id IS ?').get(lastOk) as { contact_status: string | null } | undefined
     )?.contact_status;
 
     lines.push(`### ${r.decision.toUpperCase()} · ${r.name ?? r.domain} — ${r.domain} (${r.market})`, '');
@@ -123,6 +125,16 @@ export function buildScreeningReport(db: Db, refs: ScreenedRef[], meta: { runCos
     if (v.issues.length) lines.push(`**Замечания проверки:** ${v.issues.join('; ')}`);
     lines.push(`**Риск обращения:** ${risk ? `${RISK_LABEL[risk.risk] ?? risk.risk} — ${risk.reason}` : 'не определён (проверка по старым правилам)'}`);
     lines.push(`**Доступность контакта:** ${contactStatus ?? 'не определена'}`);
+    // Emails seen in that inspection (each has an outreach_risk row there), as in the candidates report.
+    const emails = db
+      .prepare(
+        `SELECT k.email, k.found_on_url FROM outreach_risk o JOIN contacts k ON k.id = o.contact_id
+         WHERE o.company_id = ? AND o.inspection_id IS ? ORDER BY k.email`,
+      )
+      .all(r.id, lastOk) as { email: string; found_on_url: string }[];
+    for (const e of emails) lines.push(`- email: ${e.email} — источник: ${e.found_on_url}`);
+    for (const e of unconfirmedEmails(db, r.id)) lines.push(`- email: ${e.email} — источник: ${e.found_on_url} · ${UNCONFIRMED_EMAIL_NOTE}`);
+    for (const ch of currentContactChannels(db, r.id)) lines.push(`- ${channelLine(ch)}`);
     lines.push(
       `<sub>токены: ${r.input_tokens ?? '?'} вход / ${r.output_tokens ?? '?'} выход · $${(r.cost_usd ?? 0).toFixed(4)}</sub>`,
       '',

@@ -1,5 +1,6 @@
 import path from 'node:path';
 import type { MarketConfig, SegmentCode } from '../config/schema.js';
+import { extractChannels } from '../contacts/channels.js';
 import { extractContacts } from '../contacts/extract.js';
 import type { MxChecker } from '../contacts/mx.js';
 import type { Db } from '../db/connection.js';
@@ -14,6 +15,7 @@ import {
   startInspection,
   updateCompany,
   upsertContact,
+  upsertContactChannel,
   type CompanyRow,
 } from '../db/repo.js';
 import { detectEntity } from '../entity/detect.js';
@@ -295,11 +297,14 @@ export async function processCompany(company: CompanyRow, deps: ProcessDeps): Pr
         result.contactRisk = risk.risk;
       }
     }
+    // Other public channels (form page, phone, WhatsApp, Telegram); stored, never used to send anything.
+    const channels = extractChannels(textPages, market.code);
+    for (const ch of channels) upsertContactChannel(db, company.id, inspectionId, ch);
     contactStatus = contactStatusOf({
       usableEmails,
-      inquiryForm: capabilities.flags.inquiry_form.present,
-      phone: textPages.some((p) => p.$('a[href^="tel:" i]').length > 0),
-      messenger: capabilities.flags.messenger_links.present,
+      inquiryForm: channels.some((c) => c.channel === 'form'),
+      phone: channels.some((c) => c.channel === 'phone'),
+      messenger: channels.some((c) => c.channel === 'whatsapp' || c.channel === 'telegram'),
     });
     result.contactStatus = contactStatus;
 

@@ -250,3 +250,49 @@ describe('candidates report: risk vs contact availability', () => {
     db.close();
   });
 });
+
+describe('candidates report: contact channels', () => {
+  it('lists each channel with its value and source, with contact status and outreach risk shown separately', async () => {
+    const { openDb } = await import('../src/db/connection.js');
+    const { migrate } = await import('../src/db/migrate.js');
+    const { buildCandidatesReport, toMarkdown } = await import('../src/reports/candidates.js');
+    const db = openDb(':memory:');
+    migrate(db);
+    db.prepare(`INSERT INTO companies (id, domain, market, status, last_inspection_id, created_at, updated_at) VALUES ('cmp_1', 'a.co.uk', 'UK', 'inspected', 'ins_1', '', '')`).run();
+    db.prepare(`INSERT INTO inspections (id, company_id, mode, started_at, contact_status) VALUES ('ins_1', 'cmp_1', 'reinspect', 't', 'form_only')`).run();
+    db.prepare(
+      `INSERT INTO outreach_risk (id, company_id, inspection_id, contact_id, jurisdiction, recipient_type, risk, reason, confidence,
+         unknowns_json, to_verify_json, rules_version, created_at)
+       VALUES ('ork_1', 'cmp_1', 'ins_1', NULL, 'UK', 'company_likely', 'low', 'Предварительно низкий риск', 'medium', '[]', '[]', '2026-10-23.2', 't')`,
+    ).run();
+    db.prepare(`UPDATE inspections SET result_status = 'inspected' WHERE id = 'ins_1'`).run();
+    db.prepare(`INSERT INTO inspections (id, company_id, mode, started_at, result_status) VALUES ('ins_0', 'cmp_1', 'discover', 's', 'inspected')`).run();
+    // Pages the latest inspection loaded: home and contact, but not /about.
+    for (const url of ['https://a.co.uk/', 'https://a.co.uk/contact']) {
+      db.prepare(`INSERT INTO pages (id, company_id, inspection_id, url, fetched_at) VALUES (?, 'cmp_1', 'ins_1', ?, 't')`).run(`pg_${url}`, url);
+    }
+    const ch = db.prepare(
+      `INSERT INTO contact_channels (id, company_id, channel, value, match_key, uncertain, note, display, source_url,
+         first_seen_at, last_seen_at, last_inspection_id)
+       VALUES (?, 'cmp_1', ?, ?, ?, ?, ?, ?, ?, 't', 't', ?)`,
+    );
+    const note = 'национальный формат: страна предположительно UK (+44), не подтверждено';
+    ch.run('chn_1', 'form', 'https://a.co.uk/contact', 'https://a.co.uk/contact', 0, null, null, 'https://a.co.uk/contact', 'ins_1');
+    ch.run('chn_2', 'phone', '+441614960000', '+441614960000', 0, null, '0161 496 0000', 'https://a.co.uk/', 'ins_1');
+    ch.run('chn_3', 'phone', '01614960077', '+441614960077', 1, note, null, 'https://a.co.uk/', 'ins_1');
+    // Earlier inspection, gone from a page that was re-checked: not current.
+    ch.run('chn_gone', 'phone', '+441610000000', '+441610000000', 0, null, null, 'https://a.co.uk/', 'ins_0');
+    // Earlier inspection, its page was not loaded this time: kept, marked unconfirmed.
+    ch.run('chn_unchecked', 'whatsapp', 'https://wa.me/447700900123', 'https://wa.me/447700900123', 0, null, null, 'https://a.co.uk/about', 'ins_0');
+
+    const md = toMarkdown(buildCandidatesReport(db, 'UK'), 'UK');
+    expect(md).toContain('Риск обращения: 🟢 low — Предварительно низкий риск');
+    expect(md).toContain('Доступность контакта: form_only');
+    expect(md).toContain('- форма: https://a.co.uk/contact — источник: https://a.co.uk/contact');
+    expect(md).toContain('- телефон: +441614960000 (0161 496 0000) — источник: https://a.co.uk/');
+    expect(md).toContain(`- телефон: 01614960077 — источник: https://a.co.uk/ · ⚠ ${note}`);
+    expect(md).not.toContain('+441610000000');
+    expect(md).toContain('- WhatsApp: https://wa.me/447700900123 — источник: https://a.co.uk/about · ⚠ не подтверждён последней проверкой');
+    db.close();
+  });
+});

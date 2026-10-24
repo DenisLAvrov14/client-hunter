@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { loadConfig } from '../src/config/load.js';
 import { openDb, type Db } from '../src/db/connection.js';
 import { migrate } from '../src/db/migrate.js';
-import { upsertDiscovered, type CompanyRow } from '../src/db/repo.js';
+import { currentContactChannels, upsertDiscovered, type CompanyRow } from '../src/db/repo.js';
 import { DomainThrottle, FetchError, type Fetcher, type FetchOptions, type FetchResult } from '../src/inspect/fetcher.js';
 import { confirmBrokenImages } from '../src/inspect/links.js';
 import { MAX_BROWSER_LAUNCH_ATTEMPTS, PlaywrightInspector } from '../src/inspect/mobile.js';
@@ -172,6 +172,7 @@ describe('processCompany', () => {
     });
     expect(db.prepare('SELECT contact_id, risk FROM outreach_risk').all()).toEqual([{ contact_id: null, risk: 'review_required' }]);
     expect(db.prepare('SELECT contact_status FROM inspections').get()).toEqual({ contact_status: 'none' });
+    expect(db.prepare('SELECT COUNT(*) AS n FROM contact_channels').get()).toEqual({ n: 0 });
   });
 
   it('a company without email but with a form: contact form_only, outreach risk still low', async () => {
@@ -192,6 +193,87 @@ describe('processCompany', () => {
       [`${ORIGIN}/`]: [200, html, '<p>Jo Bloggs Photography</p><a href="tel:+441610000000">Call us</a>'],
     });
     expect(await processCompany(company, deps)).toMatchObject({ contactStatus: 'phone_or_messenger', risk: 'review_required' });
+  });
+
+  it('stores other public channels with source and discovery time, next to the existing emails and risks', async () => {
+    const { db, company, deps } = setup(fullSite);
+    await processCompany(company, deps);
+    expect(db.prepare('SELECT channel, value, source_url FROM contact_channels').all()).toEqual([
+      { channel: 'phone', value: '+441610000000', source_url: `${ORIGIN}/` },
+    ]);
+    expect(db.prepare('SELECT first_seen_at FROM contact_channels').get()).toMatchObject({ first_seen_at: expect.stringMatching(/^\d{4}-/) });
+    // Emails and their legal assessments are unchanged by the new channels.
+    expect((db.prepare('SELECT COUNT(*) AS n FROM contacts').get() as { n: number }).n).toBe(3);
+    expect((db.prepare('SELECT COUNT(*) AS n FROM outreach_risk WHERE contact_id IS NOT NULL').get() as { n: number }).n).toBe(3);
+  });
+
+  it('a channel seen again on re-inspection is not duplicated and keeps its first source and time', async () => {
+    const { db, company, deps } = setup(fullSite);
+    await processCompany(company, deps);
+    type Row = { id: string; first_seen_at: string; source_url: string; last_seen_at: string; last_inspection_id: string };
+    const first = db.prepare('SELECT id, first_seen_at, source_url, last_seen_at, last_inspection_id FROM contact_channels').get() as Row;
+    const fresh = db.prepare('SELECT * FROM companies WHERE id = ?').get(company.id) as CompanyRow;
+    await new Promise((r) => setTimeout(r, 5));
+    await processCompany(fresh, { ...deps, mode: 'reinspect' });
+    const rows = db.prepare('SELECT id, first_seen_at, source_url, last_seen_at, last_inspection_id FROM contact_channels').all() as Row[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ id: first.id, first_seen_at: first.first_seen_at, source_url: first.source_url });
+    expect(rows[0]!.last_inspection_id).not.toBe(first.last_inspection_id);
+    expect(rows[0]!.last_seen_at > first.first_seen_at).toBe(true);
+  });
+
+  describe('current contacts across inspections', () => {
+    const home: [number, string, string] = [200, html, '<p>Studio</p><a href="/contact">Contact</a>'];
+    const withPhone: [number, string, string] = [200, html, '<h1>Contact</h1><a href="tel:+441614960000">Call</a>'];
+    const robots: [number, string, string] = [404, html, ''];
+    const site = (contact: [number, string, string] | null) => ({
+      [`${ORIGIN}/robots.txt`]: robots,
+      [`${ORIGIN}/`]: home,
+      ...(contact ? { [`${ORIGIN}/contact`]: contact } : {}),
+    });
+    const again = async (db: Db, id: string, deps: ProcessDeps, s: ConstructorParameters<typeof FakeFetcher>[0]) => {
+      const fresh = db.prepare('SELECT * FROM companies WHERE id = ?').get(id) as CompanyRow;
+      return processCompany(fresh, { ...deps, fetcher: new FakeFetcher(s), mode: 'reinspect' });
+    };
+
+    it('a contact whose page could not be loaded this time is kept as unconfirmed, not dropped', async () => {
+      const { db, company, deps } = setup(site(withPhone));
+      await processCompany(company, deps);
+      await again(db, company.id, deps, site([500, html, 'error']));
+      expect(currentContactChannels(db, company.id)).toMatchObject([{ channel: 'phone', value: '+441614960000', confirmed: 0 }]);
+    });
+
+    it('a contact absent from a page that WAS re-checked is no longer current', async () => {
+      const { db, company, deps } = setup(site(withPhone));
+      await processCompany(company, deps);
+      await again(db, company.id, deps, site([200, html, '<h1>Contact</h1><p>Visit us.</p>']));
+      expect(currentContactChannels(db, company.id)).toEqual([]);
+    });
+
+    it('a failed latest inspection does not hide the contacts of the last successful one', async () => {
+      const { db, company, deps } = setup(site(withPhone));
+      await processCompany(company, deps);
+      const failed = await again(db, company.id, deps, { [`${ORIGIN}/robots.txt`]: robots, [`${ORIGIN}/`]: [500, html, 'down'] });
+      expect(failed.status).toBe('rejected_auto');
+      expect(currentContactChannels(db, company.id)).toMatchObject([{ channel: 'phone', confirmed: 1 }]);
+    });
+  });
+
+  it('WhatsApp/Telegram only: contact phone_or_messenger, stored as channels', async () => {
+    const { db, company, deps } = setup({
+      [`${ORIGIN}/robots.txt`]: [404, html, ''],
+      [`${ORIGIN}/`]: [200, html, '<p>Nail studio</p><a href="https://wa.me/447700900123">WhatsApp</a><a href="https://t.me/nailstudio">Telegram</a>'],
+    });
+    expect(await processCompany(company, deps)).toMatchObject({ contact: null, contactStatus: 'phone_or_messenger' });
+    expect(db.prepare('SELECT channel FROM contact_channels ORDER BY channel').all()).toEqual([{ channel: 'telegram' }, { channel: 'whatsapp' }]);
+  });
+
+  it('a WhatsApp share button alone is not a contact', async () => {
+    const { company, deps } = setup({
+      [`${ORIGIN}/robots.txt`]: [404, html, ''],
+      [`${ORIGIN}/`]: [200, html, '<p>Blog</p><a href="https://wa.me/?text=read%20this">Share</a>'],
+    });
+    expect((await processCompany(company, deps)).contactStatus).toBe('none');
   });
 
   it('records one recipient-level risk plus one row per usable email', async () => {

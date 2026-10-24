@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { MarketCode, SegmentCode } from '../config/schema.js';
+import type { ContactChannel } from '../contacts/channels.js';
 import type { ContactCandidate } from '../contacts/extract.js';
 import type { Capabilities } from '../inspect/capabilities.js';
 import type { PageLink } from '../inspect/extract.js';
@@ -188,6 +189,103 @@ export function upsertContact(db: Db, companyId: string, c: ContactCandidate, mx
     now: now(),
   });
   return (db.prepare('SELECT id FROM contacts WHERE company_id = ? AND email = ?').get(companyId, c.email) as { id: string }).id;
+}
+
+/**
+ * Records a non-email contact channel, keyed by match_key. A channel seen again keeps its first
+ * source and first_seen_at; last_seen_at / last_inspection_id move, and an uncertain value is
+ * replaced by a certain one (never the other way round). Returns its id.
+ */
+export function upsertContactChannel(db: Db, companyId: string, inspectionId: string, c: ContactChannel): string {
+  db.prepare(
+    `INSERT INTO contact_channels (id, company_id, channel, value, match_key, uncertain, note, display, source_url,
+       first_seen_at, last_seen_at, last_inspection_id)
+     VALUES (@id, @companyId, @channel, @value, @matchKey, @uncertain, @note, @display, @sourceUrl, @now, @now, @inspectionId)
+     ON CONFLICT(company_id, channel, match_key) DO UPDATE SET
+       last_seen_at = excluded.last_seen_at, last_inspection_id = excluded.last_inspection_id,
+       value = CASE WHEN excluded.uncertain = 0 THEN excluded.value ELSE contact_channels.value END,
+       note = CASE WHEN excluded.uncertain = 0 THEN NULL ELSE contact_channels.note END,
+       uncertain = MIN(contact_channels.uncertain, excluded.uncertain),
+       display = COALESCE(contact_channels.display, excluded.display)`,
+  ).run({
+    id: newId('contactChannel'),
+    companyId,
+    inspectionId,
+    now: now(),
+    channel: c.channel,
+    value: c.value,
+    matchKey: c.matchKey,
+    uncertain: c.uncertain ? 1 : 0,
+    note: c.note,
+    display: c.display,
+    sourceUrl: c.sourceUrl,
+  });
+  return (
+    db
+      .prepare('SELECT id FROM contact_channels WHERE company_id = ? AND channel = ? AND match_key = ?')
+      .get(companyId, c.channel, c.matchKey) as { id: string }
+  ).id;
+}
+
+/** The most recent inspection that finished successfully; failed or rejected ones say nothing about contacts. */
+export function latestSuccessfulInspection(db: Db, companyId: string): string | null {
+  const row = db
+    .prepare(`SELECT id FROM inspections WHERE company_id = ? AND result_status = 'inspected' ORDER BY started_at DESC, id DESC LIMIT 1`)
+    .get(companyId) as { id: string } | undefined;
+  return row?.id ?? null;
+}
+
+export interface ContactChannelRow {
+  channel: string;
+  value: string;
+  uncertain: number;
+  note: string | null;
+  display: string | null;
+  source_url: string;
+  first_seen_at: string;
+  /** 1 = seen in the latest successful inspection; 0 = its source page was not re-checked there. */
+  confirmed: number;
+}
+
+/**
+ * Current non-email channels of a company, judged by its latest successful inspection:
+ * seen there → confirmed; seen earlier and its source page was NOT loaded there → kept as
+ * unconfirmed (an incomplete check is not evidence it disappeared); seen earlier but its
+ * source page was loaded and it was gone → not current.
+ */
+export function currentContactChannels(db: Db, companyId: string): ContactChannelRow[] {
+  const latest = latestSuccessfulInspection(db, companyId);
+  if (!latest) return [];
+  return db
+    .prepare(
+      `SELECT ch.channel, ch.value, ch.uncertain, ch.note, ch.display, ch.source_url, ch.first_seen_at,
+              (ch.last_inspection_id IS @latest) AS confirmed
+       FROM contact_channels ch
+       WHERE ch.company_id = @companyId
+         AND (ch.last_inspection_id IS @latest
+              OR NOT EXISTS (SELECT 1 FROM pages p WHERE p.inspection_id = @latest AND p.url = ch.source_url))
+       ORDER BY confirmed DESC, CASE ch.channel WHEN 'form' THEN 0 WHEN 'phone' THEN 1 WHEN 'whatsapp' THEN 2 ELSE 3 END, ch.value`,
+    )
+    .all({ companyId, latest }) as ContactChannelRow[];
+}
+
+/**
+ * Emails by the same rule as currentContactChannels: an email has an outreach_risk row for every
+ * inspection it was seen in; one not seen in the latest successful inspection is kept (unconfirmed)
+ * only if the page it was found on was not loaded there.
+ */
+export function unconfirmedEmails(db: Db, companyId: string): { email: string; found_on_url: string }[] {
+  const latest = latestSuccessfulInspection(db, companyId);
+  if (!latest) return [];
+  return db
+    .prepare(
+      `SELECT k.email, k.found_on_url FROM contacts k
+       WHERE k.company_id = @companyId AND k.mx_ok = 1 AND k.status = 'ok'
+         AND NOT EXISTS (SELECT 1 FROM outreach_risk r WHERE r.contact_id = k.id AND r.inspection_id = @latest)
+         AND NOT EXISTS (SELECT 1 FROM pages p WHERE p.inspection_id = @latest AND p.url = k.found_on_url)
+       ORDER BY k.email`,
+    )
+    .all({ companyId, latest }) as { email: string; found_on_url: string }[];
 }
 
 export function insertOutreachRisk(
