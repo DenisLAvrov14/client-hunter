@@ -11,13 +11,14 @@ import {
   inspectionContactStatus,
   latestSuccessfulInspection,
   observationById,
+  protectedEmailPages,
   recipientRisk,
   unconfirmedEmails,
 } from '../db/repo.js';
 import type { DeepMeta } from '../llm/deep.js';
 import type { DeepResult, StatementT } from '../llm/schemas.js';
 import { withOptOut } from '../outreach/copyCheck.js';
-import { channelLines, RISK_LABEL, UNCONFIRMED_EMAIL_NOTE } from './candidates.js';
+import { channelLines, emailContactLine, RISK_LABEL, UNCONFIRMED_EMAIL_NOTE } from './candidates.js';
 
 const KIND_LABEL: Record<StatementT['kind'], string> = {
   fact: '✅ факт',
@@ -93,6 +94,9 @@ export function dossierMarkdown(db: Db, config: Config, companyId: string, resul
     `## ${c.name ?? c.domain} — ${c.domain} (${c.market}${c.city ? `, ${c.city}` : ''})`,
     '',
     `**Рекомендация:** ${RECOMMENDATION_LABEL[result.recommendation]} — ${result.recommendation_reason}`,
+    ...(meta.recommendationIssues?.length
+      ? [`⚠ Рекомендация противоречит критериям (код её не менял, решает человек): ${meta.recommendationIssues.join('; ')}`]
+      : []),
     `Сайт: ${c.website_url ?? c.domain}`,
     '',
     '### О бизнесе',
@@ -147,8 +151,21 @@ export function dossierMarkdown(db: Db, config: Config, companyId: string, resul
   for (const e of emails) {
     lines.push(`- email: ${e.email}${e.is_freemail ? ' (публичная почта)' : ''} — источник: ${e.found_on_url} · риск адреса: ${RISK_LABEL[e.risk] ?? e.risk}`);
   }
-  for (const e of unconfirmedEmails(db, companyId)) lines.push(`- email: ${e.email} — источник: ${e.found_on_url} · ${UNCONFIRMED_EMAIL_NOTE}`);
-  for (const l of channelLines(currentContactChannels(db, companyId))) lines.push(`- ${l}`);
+  const unconfirmed = unconfirmedEmails(db, companyId);
+  const channels = currentContactChannels(db, companyId);
+  // Email first (the primary outreach channel), then what to do without one.
+  lines.splice(
+    lines.length - emails.length,
+    0,
+    emailContactLine({
+      currentEmails: emails.length,
+      unconfirmedEmails: unconfirmed.length,
+      protectedOn: protectedEmailPages(db, lastOk),
+      hasForm: channels.some((ch) => ch.channel === 'form'),
+    }),
+  );
+  for (const e of unconfirmed) lines.push(`- email: ${e.email} — источник: ${e.found_on_url} · ${UNCONFIRMED_EMAIL_NOTE}`);
+  for (const l of channelLines(channels)) lines.push(`- ${l}`);
   lines.push(
     `**Риск обращения (отдельно от доступности):** ${risk ? `${RISK_LABEL[risk.risk] ?? risk.risk} — ${risk.reason}` : 'не определён'}`,
     '',

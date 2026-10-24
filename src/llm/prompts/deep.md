@@ -34,6 +34,8 @@ Judge the best proposal on evidence, relevance and feasibility — not on busine
 - `drop`: nothing concrete is grounded on this site, what would be offered already exists, or the business is not a fit (an IT or web agency, a closed business, a large chain).
 Never choose `maybe` only because metrics are unknown. Code turns `pursue` into `maybe` if the best proposal has no fact; it never upgrades your answer.
 
+`recommendation_blockers` names what stands against `pursue`, and must match the evidence: `best_has_no_fact`, `relevance_unclear`, `problem_not_shown`, `already_exists`, `nothing_grounded`, `not_a_fit`, and `unknown_internal_metrics` (allowed, but never enough on its own). A clear `pursue` has none; `maybe` needs at least one real blocker other than unknown metrics; `drop` needs `nothing_grounded`, `already_exists`, `not_a_fit` or `relevance_unclear`. Code checks the blockers against the evidence and asks you to correct contradictions.
+
 ## Extra pages
 If a conclusion depends on a page you have not seen (for example a "Request a quote" or "Booking" page in the known links), list up to 3 of those exact URLs in `need_pages` with a reason; they will be read and you will be asked again. When a page was read but has almost no text (marked in the input), its sub-pages in the known links are good candidates. Otherwise leave `need_pages` empty. Never ask for blog articles or individual product pages.
 
@@ -44,4 +46,4 @@ If a conclusion depends on a page you have not seen (for example a "Request a qu
 - Body: a short greeting, ONE concrete observation (or question) from this site in neutral words, ONE concrete suggestion in 1–2 sentences, and a simple question. In `offer` mode you may add one portfolio link (https://pinpinpin.it or https://cryptovigil.net) that fits; in `permission_request` mode do NOT describe services, prices or links — only say what you noticed, that you are a web developer, and ask whether they would like a short write-up of how it could be improved.
 - No digits, percentages or money; no claims that they lose money or customers; no exclamation marks; no jargon; no mention of automated research, AI or bots. Do not write a signature or an opt-out line — code adds them.
 
-Write all analysis text in Russian, plainly, for a non-technical business owner — every field, including `open_questions` and `unknowns`; no English words mixed in. Quotes stay in the language of the site; the outreach draft is in the language given in the request.
+Write all analysis text in Russian, plainly, for a non-technical business owner — every field, including `open_questions` and `unknowns`; no English words mixed in, and never words about the input itself ("digest", "input", "the code") — write about the business and its site. Quotes stay in the language of the site; the outreach draft is in the language given in the request.

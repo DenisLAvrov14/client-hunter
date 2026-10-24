@@ -41,6 +41,18 @@ export type ScreenResult = z.infer<typeof ScreenResult>;
 
 // ---- Stage C: deep analysis ----
 
+/** Reasons against "pursue" the model must name; code checks them against the evidence. */
+export const RECOMMENDATION_BLOCKERS = [
+  'best_has_no_fact', // the best proposal rests on inferences only
+  'relevance_unclear', // unclear whether it matters to how this business sells or serves customers
+  'problem_not_shown', // whether the problem really exists is not visible on the site
+  'already_exists', // the site already offers it
+  'nothing_grounded', // no opportunity is grounded in anything observed
+  'not_a_fit', // IT/web agency, closed business, large chain, not a business
+  'unknown_internal_metrics', // volumes, revenue, staff unknown: normal, never a reason on its own
+] as const;
+export type RecommendationBlocker = (typeof RECOMMENDATION_BLOCKERS)[number];
+
 export const Evidence = z.object({
   type: z.enum(['finding', 'quote', 'capability', 'none']),
   ref: z
@@ -81,6 +93,9 @@ export const DeepResult = z.object({
   best_reason: z.string().describe('Why that one, Russian'),
   recommendation: z.enum(['pursue', 'maybe', 'drop']),
   recommendation_reason: z.string().describe('Russian'),
+  recommendation_blockers: z
+    .array(z.enum(RECOMMENDATION_BLOCKERS))
+    .describe('What stands against "pursue"; empty for a clear pursue. unknown_internal_metrics alone never justifies maybe or drop'),
   unknowns: z.array(z.string()).describe('Important things the site does not tell, Russian'),
   outreach: z.object({
     language: z.enum(['en', 'ru', 'nl']),

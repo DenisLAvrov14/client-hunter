@@ -344,6 +344,22 @@ export function emailRisks(db: Db, companyId: string, inspectionId: string | nul
     .all(companyId, inspectionId) as RiskRow[];
 }
 
+/**
+ * Pages of an inspection where the site hides an email behind anti-harvesting protection
+ * (Cloudflare "email protection"). Only reported for manual lookup — never decoded or fetched.
+ */
+export function protectedEmailPages(db: Db, inspectionId: string | null): string[] {
+  return (
+    db
+      .prepare(
+        `SELECT url FROM pages WHERE inspection_id IS ?
+           AND (main_text LIKE '%[email%protected]%' OR links_json LIKE '%/cdn-cgi/l/email-protection%')
+         ORDER BY url`,
+      )
+      .all(inspectionId) as { url: string }[]
+  ).map((r) => r.url);
+}
+
 export function inspectionContactStatus(db: Db, inspectionId: string | null): string | null {
   const row = db.prepare('SELECT contact_status FROM inspections WHERE id IS ?').get(inspectionId) as { contact_status: string | null } | undefined;
   return row?.contact_status ?? null;

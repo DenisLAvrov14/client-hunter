@@ -5,6 +5,7 @@ import type { Db } from '../db/connection.js';
 import {
   currentContactChannels,
   emailRisks,
+  protectedEmailPages,
   recipientRisk,
   unconfirmedEmails,
   type ContactChannelRow,
@@ -47,6 +48,8 @@ export interface CompanyReport extends CompanyReportRow {
   channels: ContactChannelRow[];
   /** Emails from earlier inspections whose page was not re-checked by the latest successful one. */
   unconfirmedEmails: { email: string; found_on_url: string }[];
+  /** Pages hiding an email behind anti-harvesting protection (manual lookup only). */
+  protectedEmailPages: string[];
   capabilities: string[];
 }
 
@@ -86,6 +89,7 @@ export function buildCandidatesReport(db: Db, market: MarketCode): CandidatesRep
       emailRisks: emailRisks(db, c.id, c.last_inspection_id),
       channels: currentContactChannels(db, c.id),
       unconfirmedEmails: unconfirmedEmails(db, c.id),
+      protectedEmailPages: protectedEmailPages(db, c.last_inspection_id),
       capabilities: caps ? Object.entries(caps.flags).filter(([, v]) => v.present).map(([k]) => k) : [],
     };
   });
@@ -113,7 +117,7 @@ function csvCell(v: string | null | undefined): string {
 
 export function toCsv(report: CandidatesReport): string {
   const header = [
-    'domain', 'name', 'city', 'segment', 'platform', 'entity', 'outreach_risk', 'contact_status',
+    'domain', 'name', 'city', 'segment', 'platform', 'entity', 'outreach_risk', 'contact_status', 'email_contact',
     'best_email', 'best_email_risk', 'other_channels', 'verified', 'likely', 'capabilities', 'website',
   ];
   const rows = report.companies.map((c) =>
@@ -126,6 +130,7 @@ export function toCsv(report: CandidatesReport): string {
       c.entity_type,
       c.recipientRisk?.risk ?? '',
       c.contact_status ?? '',
+      emailContactOf(c.emailRisks.length),
       c.emailRisks[0]?.email ?? '',
       c.emailRisks[0]?.risk ?? '',
       c.channels.map((ch) => `${ch.channel}:${ch.value}${ch.uncertain || !ch.confirmed ? '?' : ''}`).join(' '),
@@ -150,6 +155,29 @@ export function channelLine(ch: ContactChannelRow): string {
     ch.confirmed ? '' : '⚠ не подтверждён последней проверкой (страница-источник не загружалась)',
   ].filter(Boolean);
   return `${CHANNEL_LABEL[ch.channel] ?? ch.channel}: ${shown} — источник: ${ch.source_url}${marks.length ? ` · ${marks.join(' · ')}` : ''}`;
+}
+
+/**
+ * Email-first outreach: a company is reached by a public email (company domain or public mailbox),
+ * or it needs manual contact discovery. Separate from commercial potential and from outreach risk.
+ */
+export type EmailContact = 'available' | 'manual_discovery';
+
+export function emailContactOf(currentEmails: number): EmailContact {
+  return currentEmails > 0 ? 'available' : 'manual_discovery';
+}
+
+/** "**Email:** …" line for reports: the primary channel, or what to look at when searching manually. */
+export function emailContactLine(c: { currentEmails: number; unconfirmedEmails: number; protectedOn: string[]; hasForm: boolean }): string {
+  if (emailContactOf(c.currentEmails) === 'available') return `**Email:** есть — основной канал (адресов: ${c.currentEmails})`;
+  const hints = [
+    c.unconfirmedEmails ? 'есть адрес из прошлой проверки, его страница не перепроверялась — проверить вручную' : '',
+    c.protectedOn.length
+      ? `адрес на ${c.protectedOn.join(', ')} скрыт защитой от сбора — посмотреть вручную в браузере (код его не расшифровывает)`
+      : '',
+    c.hasForm ? 'запасной канал — форма на сайте (заполняет только человек)' : '',
+  ].filter(Boolean);
+  return `**Email:** не найден — нужен ручной поиск контакта${hints.length ? `: ${hints.join('; ')}` : ''}`;
 }
 
 const CONTACT_PAGE = /contact|kontakt|контакт|quote|offerte|zayavk|заявк/i;
@@ -212,6 +240,14 @@ export function toMarkdown(report: CandidatesReport, market: MarketCode, generat
         : 'Риск обращения: не определён (проверка по старым правилам)',
     );
     lines.push(`Доступность контакта: ${c.contact_status ?? 'не определена (проверка до миграции 004)'}`);
+    lines.push(
+      emailContactLine({
+        currentEmails: c.emailRisks.length,
+        unconfirmedEmails: c.unconfirmedEmails.length,
+        protectedOn: c.protectedEmailPages,
+        hasForm: c.channels.some((ch) => ch.channel === 'form'),
+      }),
+    );
     for (const r of c.emailRisks) {
       lines.push(
         `- email: ${r.email}${r.is_freemail ? ' (публичная почта)' : ''} — источник: ${r.found_on_url ?? '—'}` +

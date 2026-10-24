@@ -2,7 +2,7 @@
 // labels against the digest and downgrades anything the evidence does not carry.
 import type { CopyRulesConfig } from '../config/schema.js';
 import { resolveCapabilityRef } from '../inspect/capabilities.js';
-import { checkDraft } from '../outreach/copyCheck.js';
+import { checkDraft, normalizeGreeting } from '../outreach/copyCheck.js';
 import { normalizeLink, type DeepInput } from './deepInput.js';
 import type { DeepResult, StatementT } from './schemas.js';
 import { DUPLICATES, NUMBERS_IN_CLAIM, quoteSource } from './validate.js';
@@ -34,6 +34,8 @@ export interface DeepValidation {
   outreachIssues: string[];
   /** Validated URLs to read before the second pass. */
   needPages: string[];
+  /** After finalize: the recommendation contradicts its blockers or the evidence (operator-facing). */
+  recommendationIssues?: string[];
 }
 
 type Strength = 'strong' | 'weak' | 'invalid';
@@ -161,6 +163,13 @@ export function validateDeep(raw: DeepResult, input: DeepInput, ctx: DeepContext
     fixable.push('"pursue" needs at least one opportunity grounded in observed evidence. Otherwise answer "maybe" or "drop" — that is a fine result.');
   }
 
+  // Cosmetic only ("Здравствуйте!" → "Здравствуйте."): fixed here instead of a paid retry; the
+  // draft is then checked as usual. Claims, offers and any other "!" are never touched.
+  const greeting = normalizeGreeting(result.outreach.body, result.outreach.language);
+  if (greeting !== result.outreach.body) {
+    issues.push('draft: "!" after the greeting replaced (formatting only)');
+    result.outreach.body = greeting;
+  }
   const draftRuleIssues = checkDraft(ctx.rules, {
     subject: result.outreach.subject,
     body: result.outreach.body,
@@ -173,6 +182,7 @@ export function validateDeep(raw: DeepResult, input: DeepInput, ctx: DeepContext
   if (draftRuleIssues.length) fixable.push(`The outreach draft breaks these rules: ${draftRuleIssues.join('; ')}. Rewrite it.`);
   const grounding = draftGrounding(result, eligible);
   fixable.push(...grounding.map((g) => g.fix));
+  fixable.push(...recommendationConsistency(result, eligible).map((r) => r.fix));
 
   for (const [where, text] of russianTexts(result)) {
     if (mixedLanguage(text)) {
@@ -247,6 +257,60 @@ export function draftGrounding(result: DeepResult, eligible: boolean[]): { issue
   return out;
 }
 
+// Internal business metrics a website never shows; used only to explain an inconsistency to the
+// model and the operator — the decision itself rests on recommendation_blockers and the evidence.
+const INTERNAL_METRICS =
+  /объ[её]м|сколько (заявок|заказов|клиентов|продаж)|количеств[оа] (заявок|заказов|клиентов)|выручк|доход|оборот|сотрудник|штат\b|дол[яи] (заказов|продаж|посетителей)|трафик|посещаемост|how many|volume|revenue|turnover|staff|traffic/i;
+
+/**
+ * Does the recommendation agree with its stated blockers and the evidence? Unknown internal
+ * metrics never justify "maybe"/"drop" on their own; a blocker that the evidence contradicts is
+ * inconsistent. Never changes the recommendation: the model is asked to correct it.
+ */
+export function recommendationConsistency(result: DeepResult, eligible: boolean[]): { issue: string; fix: string }[] {
+  const blockers = result.recommendation_blockers ?? [];
+  const real = blockers.filter((b) => b !== 'unknown_internal_metrics');
+  const best = result.opportunities[result.best_opportunity_index];
+  const bestGroundedByFact = !!best && eligible[result.best_opportunity_index] === true && best.observed.some((s) => s.kind === 'fact');
+  const metricsInReason = INTERNAL_METRICS.test(result.recommendation_reason);
+  const out: { issue: string; fix: string }[] = [];
+  const rec = result.recommendation;
+
+  if (rec === 'pursue' && real.length) {
+    out.push({
+      issue: `«стоит предложить», но названы препятствия: ${real.join(', ')}`,
+      fix: `recommendation is "pursue" but recommendation_blockers lists ${real.join(', ')}. Either they do not apply (remove them) or the recommendation is not "pursue".`,
+    });
+  }
+  if (rec === 'maybe' && real.length === 0) {
+    out.push({
+      issue: `«возможно» без настоящей причины${metricsInReason ? ': обосновано только неизвестными внутренними показателями' : ''}`,
+      fix:
+        'Unknown order volumes, revenue, staff or traffic never justify "maybe" on their own — every business has them; they belong in open_questions. ' +
+        'Either recommend "pursue", or name the real blocker in recommendation_blockers (best_has_no_fact, relevance_unclear, problem_not_shown, ...) and explain it in recommendation_reason.',
+    });
+  }
+  if (rec === 'drop' && !real.some((b) => b === 'nothing_grounded' || b === 'already_exists' || b === 'not_a_fit' || b === 'relevance_unclear')) {
+    out.push({
+      issue: '«не предлагать» без причины, которая это оправдывает',
+      fix: '"drop" needs nothing_grounded, already_exists, not_a_fit or relevance_unclear in recommendation_blockers. Otherwise it is "maybe" or "pursue".',
+    });
+  }
+  if (real.includes('best_has_no_fact') && bestGroundedByFact) {
+    out.push({
+      issue: 'указано, что у лучшего предложения нет факта, но факт есть',
+      fix: `best_has_no_fact is wrong: "${best!.title}" has a fact in observed. Remove it and reconsider the recommendation.`,
+    });
+  }
+  if (real.includes('nothing_grounded') && eligible.some(Boolean)) {
+    out.push({
+      issue: 'указано, что ничего не подтверждено, но есть обоснованное предложение',
+      fix: 'nothing_grounded is wrong: at least one opportunity is grounded in observed evidence. Remove it and reconsider the recommendation.',
+    });
+  }
+  return out;
+}
+
 /** Russian-only model text (quotes inside «» or "" may stay in the site's language). */
 function russianTexts(r: DeepResult): [string, string][] {
   const st = (where: string, items: StatementT[]) => items.map((s): [string, string] => [where, s.text]);
@@ -303,5 +367,7 @@ export function finalizeDeep(v: DeepValidation): DeepValidation {
   // The draft is judged against the final choice (the best pick may have moved above).
   const outreachIssues = [...v.draftRuleIssues, ...draftGrounding(result, v.eligible).map((g) => g.issue)];
   if (result.recommendation === 'drop') outreachIssues.push('рекомендация «не предлагать» — черновик не использовать');
-  return { ...v, result, issues, outreachIssues, retry: false, feedback: '' };
+  // Still inconsistent after the retry: kept as the model said, flagged for the human reviewer.
+  const recommendationIssues = recommendationConsistency(result, v.eligible).map((r) => r.issue);
+  return { ...v, result, issues, outreachIssues, recommendationIssues, retry: false, feedback: '' };
 }

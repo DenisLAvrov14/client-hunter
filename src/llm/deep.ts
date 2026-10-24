@@ -11,6 +11,7 @@ import { recordSupplementPages } from '../db/repo.js';
 import { fetchExtraPages } from '../inspect/extraPages.js';
 import type { Fetcher } from '../inspect/fetcher.js';
 import { newId } from '../util/ids.js';
+import { initialSettings, maxOutputTokensOf, nextSettings, TRUNCATION_FEEDBACK } from './attempt.js';
 import { estimateInputTokens, type Budget } from './budget.js';
 import { LlmError, type LlmClient, type LlmUsage } from './client.js';
 import { buildDeepInput, EXTRA_PAGE_MAX_CHARS, type DeepInput, type ExtraPage } from './deepInput.js';
@@ -28,6 +29,10 @@ export interface DeepMeta {
   issues: string[];
   eligible: boolean[];
   calls: number;
+  /** Attempts made with the after-truncation settings (0 or 1). */
+  truncationRetries?: number;
+  /** The recommendation still contradicts its stated blockers or the evidence (operator-facing). */
+  recommendationIssues?: string[];
 }
 
 export type DeepOutcome =
@@ -106,7 +111,7 @@ export function estimateDeepRun(db: Db, config: Config, companyIds: string[], fo
     est.estimateUsd += (tokens * p.input + TYPICAL_OUTPUT_TOKENS * p.output) / 1_000_000;
     // Two passes of two attempts; the second pass also carries the extra pages (and feedback, ~overhead).
     const worstIn = 2 * (tokens + SCHEMA_OVERHEAD_TOKENS) + 2 * (tokens + extraTokens + SCHEMA_OVERHEAD_TOKENS);
-    est.worstUsd += (worstIn * p.input + 4 * stage.max_output_tokens * p.output) / 1_000_000;
+    est.worstUsd += (worstIn * p.input + 4 * maxOutputTokensOf(stage) * p.output) / 1_000_000;
   }
   return est;
 }
@@ -140,17 +145,23 @@ export async function analyzeCompany(companyId: string, deps: DeepDeps): Promise
   const header = deepHeader(market.language, market.first_touch_mode);
   let cost = 0;
   let calls = 0;
+  let truncationRetries = 0;
   let lastError = '';
+
+  // Shared by both passes: once an answer was cut off, the rest of this company's analysis uses
+  // the after-truncation settings and asks for brevity (bounded: no second truncation retry).
+  let settings = initialSettings(stage);
+  let brevity = '';
 
   /** One pass: a call, and one more with feedback if validation found fixable problems. */
   const pass = async (input: DeepInput, allowExtraPages: boolean): Promise<DeepValidation | null> => {
     let feedback = '';
     let validation: DeepValidation | null = null;
     for (let attempt = 1; attempt <= 2; attempt++) {
-      const user = `${header}${input.text}${feedback ? `\n\n${feedback}` : ''}`;
+      const user = `${header}${input.text}${[brevity, feedback].filter(Boolean).map((f) => `\n\n${f}`).join('')}`;
       const worst: LlmUsage = {
         inputTokens: estimateInputTokens(DEEP_PROMPT, user) + SCHEMA_OVERHEAD_TOKENS,
-        outputTokens: stage.max_output_tokens,
+        outputTokens: settings.maxOutputTokens,
         cacheReadTokens: 0,
         cacheWriteTokens: 0,
       };
@@ -159,8 +170,8 @@ export async function analyzeCompany(companyId: string, deps: DeepDeps): Promise
       try {
         const res = await llm.complete({
           model: stage.model,
-          effort: stage.effort,
-          maxOutputTokens: stage.max_output_tokens,
+          effort: settings.effort,
+          maxOutputTokens: settings.maxOutputTokens,
           system: DEEP_PROMPT,
           user,
           schema: DeepResult,
@@ -175,7 +186,13 @@ export async function analyzeCompany(companyId: string, deps: DeepDeps): Promise
         calls++;
         lastError = `${err.code}: ${err.message}`;
         cost += budget.record({ purpose: 'deep', companyId, model: stage.model, usage: err.usage, worstCaseUsage: worst, ok: false, error: lastError }).cost;
-        if (validation || !err.retryable) break;
+        const next = nextSettings(stage, settings, err);
+        if (validation || !next) break;
+        if (next !== settings) {
+          settings = next;
+          brevity = TRUNCATION_FEEDBACK;
+          truncationRetries++;
+        }
       }
     }
     return validation;
@@ -207,6 +224,8 @@ export async function analyzeCompany(companyId: string, deps: DeepDeps): Promise
     issues: validation.issues,
     eligible: validation.eligible,
     calls,
+    truncationRetries,
+    recommendationIssues: validation.recommendationIssues ?? [],
   };
   db.prepare(
     `INSERT INTO assessments (id, company_id, inspection_id, stage, model, prompt_version, input_hash, decision, payload_json,

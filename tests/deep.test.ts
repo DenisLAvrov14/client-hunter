@@ -116,6 +116,7 @@ function answer(verified: string, over: Partial<DeepResult> = {}): DeepResult {
     best_reason: 'Цены только по запросу.',
     recommendation: 'pursue',
     recommendation_reason: 'Есть конкретная зацепка.',
+    recommendation_blockers: [],
     unknowns: ['Сколько заявок приходит'],
     outreach: {
       language: 'en',

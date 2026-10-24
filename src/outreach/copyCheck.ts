@@ -68,6 +68,22 @@ export function checkDraft(rules: CopyRulesConfig, d: DraftCheckInput): string[]
   return [...new Set(issues)];
 }
 
+// A greeting at the very start of the body, optionally with a name ("Hello Oak Stairs team").
+const GREETING =
+  /^(\s*(?:здравствуйте|добрый (?:день|вечер)|доброе утро|приветствую|hello|hi|hey|dear|good (?:morning|afternoon|evening)|hallo|beste|goedendag|goedemiddag|goedemorgen)(?:[ ,][^\n!.?]{1,40})?)!+/iu;
+
+/**
+ * Replaces a "!" right after the opening greeting — a formatting slip models repeat even after
+ * feedback — with "." (or "," before a line break in en/nl). Only that one spot: any other "!",
+ * and every word of the body, stay as written and are checked by checkDraft as usual.
+ */
+export function normalizeGreeting(body: string, language: string): string {
+  return body.replace(GREETING, (_, greeting: string, offset: number, all: string) => {
+    const lineBreakNext = /^\s*\n/.test(all.slice(offset + _.length));
+    return `${greeting}${language !== 'ru' && lineBreakNext ? ',' : '.'}`;
+  });
+}
+
 /** The final text shown to the operator: draft + opt-out line added by code (spec 10.3). */
 export function withOptOut(rules: CopyRulesConfig, body: string, language: string): string {
   const optOut = rules.opt_out[language] ?? rules.opt_out.en ?? '';

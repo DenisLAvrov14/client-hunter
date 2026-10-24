@@ -9,6 +9,8 @@ import { DomainThrottle, HttpFetcher } from '../inspect/fetcher.js';
 import { Budget, BudgetExceededError } from '../llm/budget.js';
 import { AnthropicLlmClient } from '../llm/client.js';
 import { analyzeCompany, DEEP_PROMPT_VERSION, estimateDeepRun } from '../llm/deep.js';
+import { emailRisks, latestSuccessfulInspection } from '../db/repo.js';
+import { emailContactOf } from '../reports/candidates.js';
 import { dossierMarkdown, writeDossiers } from '../reports/dossier.js';
 import { registrableDomain } from '../util/domain.js';
 
@@ -116,8 +118,9 @@ for (const [i, c] of companies.entries()) {
     } else {
       tally[out.result.recommendation]++;
       const best = out.result.opportunities[out.result.best_opportunity_index];
+      const email = emailContactOf(emailRisks(db, c.id, latestSuccessfulInspection(db, c.id)).length) === 'available' ? 'есть' : 'нужен ручной поиск';
       process.stdout.write(
-        `${n} ${out.result.recommendation.padEnd(6)} ${out.status === 'cached' ? '(кэш) ' : ''}· ${best?.title ?? '—'}` +
+        `${n} ${out.result.recommendation.padEnd(6)} ${out.status === 'cached' ? '(кэш) ' : ''}· ${best?.title ?? '—'} · email: ${email}` +
           `${out.meta.outreachIssues.length ? ' · ⚠ черновик не прошёл проверку' : ''} · $${out.cost.toFixed(4)}\n`,
       );
       sections.push(dossierMarkdown(db, config, c.id, out.result, out.meta, out.cost));

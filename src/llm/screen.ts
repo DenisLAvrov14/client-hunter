@@ -6,6 +6,7 @@ import type { Config } from '../config/load.js';
 import type { Db } from '../db/connection.js';
 import { buildDigest, type Digest } from '../inspect/digest.js';
 import { newId } from '../util/ids.js';
+import { initialSettings, nextSettings, TRUNCATION_FEEDBACK } from './attempt.js';
 import { estimateInputTokens, type Budget } from './budget.js';
 import { LlmError, type LlmClient, type LlmUsage } from './client.js';
 import { ScreenResult } from './schemas.js';
@@ -70,12 +71,13 @@ export async function screenCompany(companyId: string, deps: ScreenDeps): Promis
   let validation: ScreenValidation | null = null;
   let lastCallId: string | null = null;
   let cost = 0;
+  let settings = initialSettings(stage);
 
   for (let attempt = 1; attempt <= 2; attempt++) {
     const user = userMessage(digest, feedback);
     const worstCase: LlmUsage = {
       inputTokens: estimateInputTokens(SCREEN_PROMPT, user) + 500, // + schema/format overhead
-      outputTokens: stage.max_output_tokens,
+      outputTokens: settings.maxOutputTokens,
       cacheReadTokens: 0,
       cacheWriteTokens: 0,
     };
@@ -85,8 +87,8 @@ export async function screenCompany(companyId: string, deps: ScreenDeps): Promis
     try {
       const res = await llm.complete({
         model: stage.model,
-        effort: stage.effort,
-        maxOutputTokens: stage.max_output_tokens,
+        effort: settings.effort,
+        maxOutputTokens: settings.maxOutputTokens,
         system: SCREEN_PROMPT,
         user,
         schema: ScreenResult,
@@ -111,7 +113,11 @@ export async function screenCompany(companyId: string, deps: ScreenDeps): Promis
       cost += rec.cost;
       // A failed retry must not discard a usable first answer.
       if (validation) break;
-      if (!err.retryable || attempt === 2) return { status: 'failed', error: `${err.code}: ${err.message}`, cost };
+      // A cut-off answer is retried once with the stage's on_truncation settings, never identically.
+      const next = nextSettings(stage, settings, err);
+      if (!next || attempt === 2) return { status: 'failed', error: `${err.code}: ${err.message}`, cost };
+      if (next !== settings) feedback = TRUNCATION_FEEDBACK;
+      settings = next;
     }
   }
   if (!validation) return { status: 'failed', error: 'no valid answer', cost };
