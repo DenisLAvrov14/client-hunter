@@ -58,6 +58,7 @@ npm run deep -- --domain a1designs.co.uk --domain freza.ru             # пла�
 | `npm run report:candidates -- --market UK` | пересобрать отчёт из базы |
 | `npm run reinspect -- --dry-run` | сколько компаний, отсеянных по старым правилам, будет перепроверено |
 | `npm run reinspect -- --market UK --limit 50` | перепроверить их по новым правилам (без браузера; `--browser` — с мобильными проверками) |
+| `npm run reinspect -- --browser --domain a.co.uk --domain b.kz` | перепроверить именно эти компании текущим кодом (например, короткий список перед этапом C; бесплатно, без LLM) |
 | `npm run screen -- --dry-run --domain example.co.uk` | показать, что уйдёт в Claude Haiku, и оценку стоимости — **без вызова API** |
 | `npm run screen -- --market UK --limit 10` | этап B: отбор компаний через Claude Haiku (**платно**, ~$0.001 за компанию; лимиты в `config/limits.yaml`) |
 | `npm run deep -- --dry-run --domain example.co.uk` | этап C: показать вход и оценку стоимости — **без вызова API и без записи в базу** |

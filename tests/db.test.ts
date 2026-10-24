@@ -4,7 +4,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { openDb } from '../src/db/connection.js';
 import { migrate, pendingMigrations } from '../src/db/migrate.js';
-import { companiesForReinspection } from '../src/db/repo.js';
+import { companiesByDomain, companiesForReinspection } from '../src/db/repo.js';
 
 describe('migrate', () => {
   it('creates all spec tables and is idempotent', () => {
@@ -106,6 +106,18 @@ describe('companiesForReinspection', () => {
 
     db.prepare("UPDATE companies SET last_inspection_id = 'ins_1' WHERE id = 'cmp_a'").run();
     expect(pick()).toEqual(['cmp_c', 'cmp_d']);
+    db.close();
+  });
+
+  it('companiesByDomain picks a shortlist by domain (www/URL accepted), once each, and reports unknown ones', () => {
+    const db = openDb(':memory:');
+    migrate(db);
+    const add = db.prepare(`INSERT INTO companies (id, domain, market, status, created_at, updated_at) VALUES (?, ?, 'UK', 'inspected', '', '')`);
+    add.run('cmp_a', 'a.co.uk');
+    add.run('cmp_b', 'b.co.uk');
+    const { found, missing } = companiesByDomain(db, ['b.co.uk', 'https://www.a.co.uk/contact', 'B.CO.UK', 'nope.co.uk']);
+    expect(found.map((c) => c.id)).toEqual(['cmp_b', 'cmp_a']);
+    expect(missing).toEqual(['nope.co.uk']);
     db.close();
   });
 });

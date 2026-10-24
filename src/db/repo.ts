@@ -384,6 +384,19 @@ export function insertOutreachRisk(
   );
 }
 
+/** Companies by registrable domain, in the given order; unknown domains are returned separately. */
+export function companiesByDomain(db: Db, domains: string[]): { found: CompanyRow[]; missing: string[] } {
+  const found: CompanyRow[] = [];
+  const missing: string[] = [];
+  for (const d of domains) {
+    const domain = registrableDomain(d) ?? d.toLowerCase();
+    const row = db.prepare('SELECT * FROM companies WHERE domain = ?').get(domain) as CompanyRow | undefined;
+    if (!row) missing.push(d);
+    else if (!found.some((c) => c.id === row.id)) found.push(row);
+  }
+  return { found, missing };
+}
+
 /** Companies whose earlier inspection ended in one of `reasons` (or a legacy candidate), for re-inspection. */
 export function companiesForReinspection(
   db: Db,

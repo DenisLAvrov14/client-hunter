@@ -33,8 +33,9 @@ const BOOKING_WIDGETS =
 const BOOKING_TEXT =
   /book (now|online|an appointment|a table|a session)|online booking|schedule (a|an|your) (call|appointment|visit)|online (boeken|reserveren)|afspraak maken|записаться (онлайн|на приём|на прием)|онлайн[- ]запись|забронировать/i;
 const CALCULATOR = /calculator|configurator|build your own|price estimator|rekenmodule|калькулятор|конфигуратор|рассчитать стоимость/i;
-// Non-zero amounts only: an empty mini-cart ("£0.00") is not a price list.
-const PRICE_VISIBLE = /[£€$]\s?[1-9]|[1-9][\d\s.,]*\s?(€|eur\b|gbp\b|руб|₽|₸|тг\b|тенге)/i;
+// Non-zero amounts only: an empty mini-cart ("£0.00") is not a price list. The whole amount is
+// captured ("£204.00", not "£2"): the match is shown to the model as evidence.
+const PRICE_VISIBLE = /[£€$]\s?[1-9][\d,]*(?:\.\d{1,2})?|[1-9][\d\s.,]*\s?(€|eur\b|gbp\b|руб|₽|₸|тг\b|тенге)/i;
 const LOGIN = /\b(log ?in|sign in|my account|customer portal|client area|inloggen|mijn account)\b|личный кабинет|войти/i;
 // Matched on widget script hosts, not product words ("intercom" is also a door-entry product).
 const LIVE_CHAT =
