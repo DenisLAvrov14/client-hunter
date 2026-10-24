@@ -1,10 +1,11 @@
 // Checks a screening answer against the digest. The model interprets; code verifies.
 import type { CapabilityKey } from '../inspect/capabilities.js';
 import type { Digest } from '../inspect/digest.js';
+import { normalizeLink } from './deepInput.js';
 import type { ScreenResult } from './schemas.js';
 
 export interface OpportunityCheck {
-  /** The hook is a real finding id or a quote found verbatim on the cited page. */
+  /** The hook is a real finding id or a verbatim quote; hook_page_url is corrected to the page it is on. */
   hookVerified: boolean;
   /** Capability the site already has that this opportunity seems to duplicate. */
   alreadyPresent: CapabilityKey | null;
@@ -32,17 +33,26 @@ export function normalizeForMatch(s: string): string {
     .trim();
 }
 
-export function quoteFound(quote: string, pageUrl: string, digest: Digest): 'page' | 'other_page' | false {
+/**
+ * Where a quote really is: the cited page when it is there (URLs compared without trailing slash
+ * or #fragment), else the first other page that has it, else null. Callers must never keep a
+ * wrong citation: `url` is the page to show as the source.
+ */
+export function quoteSource(quote: string, pageUrl: string, digest: Digest): { url: string; onCitedPage: boolean } | null {
   const q = normalizeForMatch(quote);
-  if (q.length < 4) return false;
-  const page = digest.pageTexts.get(pageUrl);
-  if (page && normalizeForMatch(page).includes(q)) return 'page';
-  for (const text of digest.pageTexts.values()) if (normalizeForMatch(text).includes(q)) return 'other_page';
-  return false;
+  if (q.length < 4) return null;
+  const cited = normalizeLink(pageUrl);
+  let other: string | null = null;
+  for (const [url, text] of digest.pageTexts) {
+    if (!normalizeForMatch(text).includes(q)) continue;
+    if (normalizeLink(url) === cited) return { url, onCitedPage: true };
+    other ??= url;
+  }
+  return other === null ? null : { url: other, onCitedPage: false };
 }
 
 // Opportunity title words → capability that would make it redundant.
-const DUPLICATES: [RegExp, CapabilityKey][] = [
+export const DUPLICATES: [RegExp, CapabilityKey][] = [
   [/брон|запис|booking|appointment|schedul/i, 'online_booking'],
   [/интернет-магазин|корзин|онлайн-продаж|e-?commerce|online shop|checkout/i, 'cart_checkout'],
   [/калькулятор|конфигуратор|calculator|configurator/i, 'calculator_configurator'],
@@ -51,7 +61,7 @@ const DUPLICATES: [RegExp, CapabilityKey][] = [
   [/онлайн-чат|чат на сайте|live chat/i, 'live_chat'],
 ];
 
-const NUMBERS_IN_CLAIM = /\d+\s?%|[£€$₽₸]\s?\d|\d\s?(раз|times)\b/i;
+export const NUMBERS_IN_CLAIM = /\d+\s?%|[£€$₽₸]\s?\d|\d\s?(раз|times)\b/i;
 
 export function validateScreen(raw: ScreenResult, digest: Digest): ScreenValidation {
   const issues: string[] = [];
@@ -60,14 +70,15 @@ export function validateScreen(raw: ScreenResult, digest: Digest): ScreenValidat
   const findingIds = new Set(digest.observations.map((o) => o.id));
 
   result.commercial_signals = result.commercial_signals.filter((s) => {
-    const found = quoteFound(s.quote, s.page_url, digest);
+    const found = quoteSource(s.quote, s.page_url, digest);
     if (!found) {
       issues.push(`signal quote not found on the site: "${s.quote.slice(0, 80)}"`);
       fixable.push(`The quote "${s.quote.slice(0, 80)}" is not in the page text. Copy quotes exactly or omit them.`);
-    } else if (found === 'other_page') {
-      issues.push(`signal quote is on a different page than cited: "${s.quote.slice(0, 60)}"`);
+    } else if (!found.onCitedPage) {
+      issues.push(`signal quote is on ${found.url}, not on the cited ${s.page_url || '(none)'}: "${s.quote.slice(0, 60)}"`);
+      s.page_url = found.url;
     }
-    return found !== false;
+    return found !== null;
   });
   if (result.commercial_signals.length > 3) result.commercial_signals = result.commercial_signals.slice(0, 3);
 
@@ -85,7 +96,12 @@ export function validateScreen(raw: ScreenResult, digest: Digest): ScreenValidat
         fixable.push(`"${o.hook}" is not a finding id from the digest. Use only listed ids.`);
       }
     } else if (o.hook_type === 'quote') {
-      hookVerified = quoteFound(o.hook, o.hook_page_url, digest) !== false;
+      const found = quoteSource(o.hook, o.hook_page_url, digest);
+      hookVerified = found !== null;
+      if (found && !found.onCitedPage) {
+        issues.push(`opportunity quote is on ${found.url}, not on the cited ${o.hook_page_url || '(none)'}: "${o.hook.slice(0, 60)}"`);
+        o.hook_page_url = found.url;
+      }
       if (!hookVerified) {
         issues.push(`opportunity quote not found on the site: "${o.hook.slice(0, 80)}"`);
         fixable.push(`The quote "${o.hook.slice(0, 80)}" (for "${o.title}") is not in the page text. Copy it exactly.`);

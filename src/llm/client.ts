@@ -60,19 +60,27 @@ function usageOf(u: Anthropic.Usage): LlmUsage {
 export class AnthropicLlmClient implements LlmClient {
   private readonly client: Anthropic;
 
-  constructor(opts: { apiKey: string; timeoutMs: number; maxRetries: number }) {
-    this.client = new Anthropic({ apiKey: opts.apiKey, timeout: opts.timeoutMs, maxRetries: opts.maxRetries });
+  /**
+   * SDK retries are always off (the SDK default is 2): one complete() is exactly one HTTP request,
+   * so every paid attempt passes through the caller's Budget.assertCanSpend and Budget.record.
+   * Callers retry transient errors themselves. `fetch` is a test seam only.
+   */
+  constructor(opts: { apiKey: string; timeoutMs: number; fetch?: typeof globalThis.fetch }) {
+    this.client = new Anthropic({ apiKey: opts.apiKey, timeout: opts.timeoutMs, maxRetries: 0, ...(opts.fetch ? { fetch: opts.fetch } : {}) });
   }
 
   async complete<S extends z.ZodType>(req: LlmRequest<S>): Promise<LlmResponse<z.infer<S>>> {
+    const format = zodOutputFormat(req.schema);
     let response;
     try {
-      response = await this.client.messages.parse({
+      // create(), not parse(): parse() throws on an incomplete JSON before stop_reason and usage can
+      // be read, so a truncated answer looked like "invalid output" with unknown (worst-case) cost.
+      response = await this.client.messages.create({
         model: req.model,
         max_tokens: req.maxOutputTokens,
         system: req.system,
         messages: [{ role: 'user', content: req.user }],
-        output_config: { effort: req.effort, format: zodOutputFormat(req.schema) },
+        output_config: { effort: req.effort, format },
       });
     } catch (err) {
       if (err instanceof Anthropic.AuthenticationError || err instanceof Anthropic.PermissionDeniedError) {
@@ -81,16 +89,19 @@ export class AnthropicLlmClient implements LlmClient {
       if (err instanceof Anthropic.RateLimitError) throw new LlmError(err.message, 'rate_limited');
       if (err instanceof Anthropic.BadRequestError) throw new LlmError(err.message, 'bad_request');
       if (err instanceof Anthropic.APIError) throw new LlmError(`API error ${err.status ?? ''}: ${err.message}`, 'api');
-      // A schema mismatch surfaces as a parse error from the SDK helper.
-      throw new LlmError(`Invalid model output: ${(err as Error).message}`, 'invalid_output');
+      throw new LlmError(`Request failed: ${(err as Error).message}`, 'api');
     }
 
     const usage = usageOf(response.usage);
+    // stop_reason first: a cut-off answer is "truncated" even though its JSON is also broken.
     if (response.stop_reason === 'refusal') throw new LlmError('Model declined the request', 'refusal', usage);
-    if (response.stop_reason === 'max_tokens') throw new LlmError('Output truncated at max_tokens', 'truncated', usage);
-    if (response.parsed_output === null || response.parsed_output === undefined) {
-      throw new LlmError('No structured output in response', 'invalid_output', usage);
+    if (response.stop_reason === 'max_tokens') throw new LlmError(`Output truncated at max_tokens (${req.maxOutputTokens})`, 'truncated', usage);
+    const text = response.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('');
+    if (!text.trim()) throw new LlmError('No structured output in response', 'invalid_output', usage);
+    try {
+      return { data: format.parse(text) as z.infer<S>, usage, model: response.model };
+    } catch (err) {
+      throw new LlmError(`Invalid model output: ${(err as Error).message.slice(0, 300)}`, 'invalid_output', usage);
     }
-    return { data: response.parsed_output as z.infer<S>, usage, model: response.model };
   }
 }

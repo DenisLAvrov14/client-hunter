@@ -6,7 +6,7 @@ import type { Capabilities } from '../inspect/capabilities.js';
 import type { PageLink } from '../inspect/extract.js';
 import type { ObservationDraft, PageContext } from '../inspect/types.js';
 import type { ContactStatus } from '../outreach/contactStatus.js';
-import type { RiskAssessment } from '../outreach/risk.js';
+import { LEGACY_NO_EMAIL_RULES_VERSION, type RiskAssessment } from '../outreach/risk.js';
 import type { CandidateCompany } from '../sources/types.js';
 import { registrableDomain } from '../util/domain.js';
 import { newId } from '../util/ids.js';
@@ -227,6 +227,24 @@ export function upsertContactChannel(db: Db, companyId: string, inspectionId: st
   ).id;
 }
 
+/**
+ * Stores pages read on demand by stage C under a separate 'supplement' inspection, so they are
+ * kept as evidence without changing what the latest real inspection loaded (contact logic).
+ */
+export function recordSupplementPages(
+  db: Db,
+  companyId: string,
+  pages: { page: PageContext; mainText: string }[],
+): string | null {
+  if (pages.length === 0) return null;
+  const id = newId('inspection');
+  db.prepare(
+    `INSERT INTO inspections (id, company_id, mode, started_at, finished_at, result_status) VALUES (?, ?, 'deep_pages', ?, ?, 'supplement')`,
+  ).run(id, companyId, now(), now());
+  for (const p of pages) insertPage(db, companyId, id, p.page, { mainText: p.mainText, links: [] });
+  return id;
+}
+
 /** The most recent inspection that finished successfully; failed or rejected ones say nothing about contacts. */
 export function latestSuccessfulInspection(db: Db, companyId: string): string | null {
   const row = db
@@ -288,6 +306,71 @@ export function unconfirmedEmails(db: Db, companyId: string): { email: string; f
     .all({ companyId, latest }) as { email: string; found_on_url: string }[];
 }
 
+export interface RiskRow {
+  email: string | null;
+  is_freemail: number | null;
+  found_on_url: string | null;
+  risk: string;
+  reason: string;
+  recipient_type: string;
+}
+
+/**
+ * Risk for the recipient as such (market + recipient type) at one inspection; null when there is
+ * none, including inspections assessed under the legacy rules where a row without contact meant
+ * "no email found". Contact availability is separate (inspectionContactStatus).
+ */
+export function recipientRisk(db: Db, companyId: string, inspectionId: string | null): RiskRow | null {
+  return (
+    (db
+      .prepare(
+        `SELECT NULL AS email, NULL AS is_freemail, NULL AS found_on_url, r.risk, r.reason, r.recipient_type FROM outreach_risk r
+         WHERE r.company_id = ? AND r.inspection_id IS ? AND r.contact_id IS NULL AND r.rules_version != ?
+         ORDER BY r.created_at DESC LIMIT 1`,
+      )
+      .get(companyId, inspectionId, LEGACY_NO_EMAIL_RULES_VERSION) as RiskRow | undefined) ?? null
+  );
+}
+
+/** Per-address risk refinements at one inspection, lowest risk first. */
+export function emailRisks(db: Db, companyId: string, inspectionId: string | null): RiskRow[] {
+  return db
+    .prepare(
+      `SELECT k.email, k.is_freemail, k.found_on_url, r.risk, r.reason, r.recipient_type FROM outreach_risk r
+       JOIN contacts k ON k.id = r.contact_id
+       WHERE r.company_id = ? AND r.inspection_id IS ?
+       ORDER BY CASE r.risk WHEN 'low' THEN 0 WHEN 'review_required' THEN 1 ELSE 2 END, k.email`,
+    )
+    .all(companyId, inspectionId) as RiskRow[];
+}
+
+/**
+ * Pages of an inspection where the site hides an email behind anti-harvesting protection
+ * (Cloudflare "email protection"). Only reported for manual lookup — never decoded or fetched.
+ */
+export function protectedEmailPages(db: Db, inspectionId: string | null): string[] {
+  return (
+    db
+      .prepare(
+        `SELECT url FROM pages WHERE inspection_id IS ?
+           AND (main_text LIKE '%[email%protected]%' OR links_json LIKE '%/cdn-cgi/l/email-protection%')
+         ORDER BY url`,
+      )
+      .all(inspectionId) as { url: string }[]
+  ).map((r) => r.url);
+}
+
+export function inspectionContactStatus(db: Db, inspectionId: string | null): string | null {
+  const row = db.prepare('SELECT contact_status FROM inspections WHERE id IS ?').get(inspectionId) as { contact_status: string | null } | undefined;
+  return row?.contact_status ?? null;
+}
+
+export function observationById(db: Db, id: string): { code: string; status: string; evidence_url: string | null } | null {
+  return (db.prepare('SELECT code, status, evidence_url FROM observations WHERE id = ?').get(id) as
+    | { code: string; status: string; evidence_url: string | null }
+    | undefined) ?? null;
+}
+
 export function insertOutreachRisk(
   db: Db,
   companyId: string,
@@ -315,6 +398,19 @@ export function insertOutreachRisk(
     rulesVersion,
     now(),
   );
+}
+
+/** Companies by registrable domain, in the given order; unknown domains are returned separately. */
+export function companiesByDomain(db: Db, domains: string[]): { found: CompanyRow[]; missing: string[] } {
+  const found: CompanyRow[] = [];
+  const missing: string[] = [];
+  for (const d of domains) {
+    const domain = registrableDomain(d) ?? d.toLowerCase();
+    const row = db.prepare('SELECT * FROM companies WHERE domain = ?').get(domain) as CompanyRow | undefined;
+    if (!row) missing.push(d);
+    else if (!found.some((c) => c.id === row.id)) found.push(row);
+  }
+  return { found, missing };
 }
 
 /** Companies whose earlier inspection ended in one of `reasons` (or a legacy candidate), for re-inspection. */

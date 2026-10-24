@@ -4,16 +4,26 @@ stages:
   screen:                        # stage B: cheap screening of many companies
     model: claude-haiku-5-5
     effort: low
-    max_output_tokens: 3000      # includes thinking tokens; truncated answers are retried once
+    max_output_tokens: 3000      # includes thinking tokens
     digest_max_chars: 6000       # cleaned site text + findings sent per company (~1.5-2K tokens)
-  deep:                          # stage C: shortlisted companies only (not implemented yet)
+    on_truncation:               # ONE retry after a cut-off answer, never with identical settings
+      effort: low
+      max_output_tokens: 5000
+  deep:                          # stage C (npm run deep): shortlisted companies only, up to 4 calls each
     model: claude-haiku-5-5
-    effort: medium
-    max_output_tokens: 8000
+    effort: medium               # kept: low would cut thinking (40-65% of output so far), not yet A/B-tested for quality
+    max_output_tokens: 10000     # was 8000: A1 hit it in 3 of 5 attempts; billed per token used, so typical cost is unchanged
     digest_max_chars: 16000
+    on_truncation:               # fallback only: ONE retry per company, asked to be brief; kept for the rest of its analysis
+      effort: low                # less thinking, which is billed as output
+      max_output_tokens: 12000
+    draft_repair:                # ONE small request regenerating only a failing outreach draft (never the whole dossier)
+      effort: low
+      max_output_tokens: 2000
 
 request_timeout_ms: 60000
-sdk_max_retries: 2               # SDK retries 429/5xx/network errors with backoff
+# No SDK retries: every HTTP request is one budgeted attempt; stages retry transient errors
+# themselves (screen: 2 attempts, deep: 2 per pass), each checked and recorded by the budget.
 
 # USD per 1M tokens. Anthropic pricing table cached 2026-10-06 (verify before relying on it):
 # Haiku 5.5 $0.10 in / $0.50 out for prompts up to 100K tokens; thinking is billed as output.
