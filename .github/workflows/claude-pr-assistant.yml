@@ -36,5 +36,6 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           trigger_phrase: "@claude"
           claude_args: |
-            --max-turns 12
+            --max-turns 8
+            --max-budget-usd 0.75
             --append-system-prompt "Work only on the current PR branch. Address verified code review issues with minimal patches and tests. Never modify production databases, send outreach messages, merge or deploy. Do not run paid business screening or deep analysis commands. Summarize tests and remaining concerns."
