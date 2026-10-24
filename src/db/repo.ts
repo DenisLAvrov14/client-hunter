@@ -227,6 +227,24 @@ export function upsertContactChannel(db: Db, companyId: string, inspectionId: st
   ).id;
 }
 
+/**
+ * Stores pages read on demand by stage C under a separate 'supplement' inspection, so they are
+ * kept as evidence without changing what the latest real inspection loaded (contact logic).
+ */
+export function recordSupplementPages(
+  db: Db,
+  companyId: string,
+  pages: { page: PageContext; mainText: string }[],
+): string | null {
+  if (pages.length === 0) return null;
+  const id = newId('inspection');
+  db.prepare(
+    `INSERT INTO inspections (id, company_id, mode, started_at, finished_at, result_status) VALUES (?, ?, 'deep_pages', ?, ?, 'supplement')`,
+  ).run(id, companyId, now(), now());
+  for (const p of pages) insertPage(db, companyId, id, p.page, { mainText: p.mainText, links: [] });
+  return id;
+}
+
 /** The most recent inspection that finished successfully; failed or rejected ones say nothing about contacts. */
 export function latestSuccessfulInspection(db: Db, companyId: string): string | null {
   const row = db

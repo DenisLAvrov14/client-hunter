@@ -42,7 +42,7 @@ export function quoteFound(quote: string, pageUrl: string, digest: Digest): 'pag
 }
 
 // Opportunity title words → capability that would make it redundant.
-const DUPLICATES: [RegExp, CapabilityKey][] = [
+export const DUPLICATES: [RegExp, CapabilityKey][] = [
   [/брон|запис|booking|appointment|schedul/i, 'online_booking'],
   [/интернет-магазин|корзин|онлайн-продаж|e-?commerce|online shop|checkout/i, 'cart_checkout'],
   [/калькулятор|конфигуратор|calculator|configurator/i, 'calculator_configurator'],
@@ -51,7 +51,7 @@ const DUPLICATES: [RegExp, CapabilityKey][] = [
   [/онлайн-чат|чат на сайте|live chat/i, 'live_chat'],
 ];
 
-const NUMBERS_IN_CLAIM = /\d+\s?%|[£€$₽₸]\s?\d|\d\s?(раз|times)\b/i;
+export const NUMBERS_IN_CLAIM = /\d+\s?%|[£€$₽₸]\s?\d|\d\s?(раз|times)\b/i;
 
 export function validateScreen(raw: ScreenResult, digest: Digest): ScreenValidation {
   const issues: string[] = [];
