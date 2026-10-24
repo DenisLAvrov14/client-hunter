@@ -1,0 +1,40 @@
+name: Claude PR assistant
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+jobs:
+  claude-fix:
+    # Only the repository owner can request a run, and only on a pull request.
+    if: >-
+      github.event.issue.pull_request != null &&
+      github.event.comment.user.login == 'DenisLAvrov14' &&
+      contains(github.event.comment.body, '@claude')
+    runs-on: ubuntu-latest
+    concurrency:
+      group: claude-pr-${{ github.event.issue.number }}
+      cancel-in-progress: false
+    timeout-minutes: 25
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+      - name: Claude responds to PR feedback
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          trigger_phrase: "@claude"
+          claude_args: |
+            --max-turns 12
+            --append-system-prompt "Work only on the current PR branch. Address verified code review issues with minimal patches and tests. Never modify production databases, send outreach messages, merge or deploy. Do not run paid business screening or deep analysis commands. Summarize tests and remaining concerns."
