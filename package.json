@@ -17,6 +17,7 @@
     "screen": "tsx src/cli/screen.ts",
     "deep": "tsx src/cli/deep.ts",
     "leads": "tsx src/cli/leads.ts",
+    "intent": "tsx src/cli/intent.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",

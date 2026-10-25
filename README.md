@@ -19,6 +19,15 @@ cp .env.example .env               # на Windows: copy .env.example .env
 npm run check-config
 ```
 
+## Запросы с намерением заказать разработку (основной поток)
+```sh
+npm run intent -- --dry-run   # собрать и разобрать, без записи в базу
+npm run intent                # то же + сохранить в intent_leads
+```
+Ищет **публичные запросы, где человек или компания сами ищут исполнителя**: Hacker News («Seeking freelancer», контрактные роли в «Who is hiring») и открытые IT-тендеры UK Contracts Finder. Только публичные API, `robots.txt` соблюдается, ничего не отправляется. Правила — `config/intent.yaml`; LLM не используется (по флагу `--llm` Haiku проверяет только неоднозначные запросы, с лимитом `--max-llm-usd`). Отчёт — `data/reports/intent-*.md` и `.csv`: ссылка на оригинал, дата, честный статус, цитата намерения, что нужно, канал ответа, причины решения. Пример — [docs/examples/intent-report-2026-10-25.md](docs/examples/intent-report-2026-10-25.md).
+
+Сканер сайтов ниже остаётся вспомогательным инструментом и в этот отчёт не попадает.
+
 ## Как посмотреть поиск
 ```sh
 npm run pipeline -- --market UK --segment S2 --limit 10

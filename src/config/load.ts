@@ -5,6 +5,7 @@ import type { z } from 'zod';
 import {
   AppSchema,
   CopyRulesSchema,
+  IntentSchema,
   LimitsSchema,
   LlmSchema,
   MarketSchema,
@@ -13,6 +14,7 @@ import {
   SegmentSchema,
   type AppConfig,
   type CopyRulesConfig,
+  type IntentConfig,
   type LimitsConfig,
   type LlmConfig,
   type MarketCode,
@@ -30,6 +32,7 @@ export interface Config {
   scoring: ScoringConfig;
   offers: OffersConfig;
   copyRules: CopyRulesConfig;
+  intent: IntentConfig;
   markets: Map<MarketCode, MarketConfig>;
   segments: Map<SegmentCode, SegmentConfig>;
 }
@@ -80,6 +83,7 @@ export function loadConfig(configDir = path.resolve('config')): Config {
     scoring: loadFile(path.join(configDir, 'scoring.yaml'), ScoringSchema),
     offers: loadFile(path.join(configDir, 'offers.yaml'), OffersSchema),
     copyRules: loadFile(path.join(configDir, 'copy-rules.yaml'), CopyRulesSchema),
+    intent: loadFile(path.join(configDir, 'intent.yaml'), IntentSchema),
     markets,
     segments,
   };

@@ -15,6 +15,7 @@ describe('migrate', () => {
       '003_assessments.sql',
       '004_contact_status.sql',
       '005_contact_channels.sql',
+      '006_intent_leads.sql',
     ]);
     expect(migrate(db)).toEqual([]);
 
@@ -43,6 +44,7 @@ describe('migrate', () => {
         'outreach_risk',
         'assessments',
         'contact_channels',
+        'intent_leads',
         'schema_migrations',
       ]),
     );
@@ -52,7 +54,7 @@ describe('migrate', () => {
   it('pendingMigrations lists what migrate would apply, without changing a read-only database', () => {
     const file = path.join(mkdtempSync(path.join(tmpdir(), 'ch-pending-')), 'db.sqlite');
     const rw = openDb(file);
-    expect(pendingMigrations(rw)).toHaveLength(5);
+    expect(pendingMigrations(rw)).toHaveLength(6);
     migrate(rw, path.resolve('migrations'));
     rw.prepare('DELETE FROM schema_migrations WHERE name = ?').run('005_contact_channels.sql');
     rw.close();

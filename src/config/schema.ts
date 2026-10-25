@@ -203,7 +203,27 @@ export const SegmentSchema = z.looseObject({
   osm_tags: z.array(z.string().regex(/^[a-z_:]+=[^=\s]+$/, 'expected key=value')).default([]),
 });
 
+const words = z.array(z.string().min(1).regex(/^[^A-Z]*$/, 'lower-case only')).min(1);
+
+/** Buyer-intent discovery (config/intent.yaml). */
+export const IntentSchema = z.strictObject({
+  sources: z.strictObject({
+    hn_freelance: z.strictObject({ enabled: z.boolean(), months: z.number().int().min(1).max(24) }),
+    hn_hiring: z.strictObject({ enabled: z.boolean(), months: z.number().int().min(1).max(12) }),
+    uk_contracts_finder: z.strictObject({
+      enabled: z.boolean(),
+      days: z.number().int().min(1).max(365),
+      cpv_prefixes: z.array(z.string().regex(/^\d{2,8}$/)).min(1),
+      large_value_gbp: z.number().positive(),
+    }),
+  }),
+  skills: z.strictObject({ strong: words, partial: words }),
+  markers: z.strictObject({ recruiter: words, closed: words, not_our_work: words, non_dev_roles: words, procurement_not_dev: words }),
+  geo: z.strictObject({ target: words, restricted_other: words }),
+});
+
 export type AppConfig = z.infer<typeof AppSchema>;
+export type IntentConfig = z.infer<typeof IntentSchema>;
 export type LimitsConfig = z.infer<typeof LimitsSchema>;
 export type LlmConfig = z.infer<typeof LlmSchema>;
 export type ScoringConfig = z.infer<typeof ScoringSchema>;

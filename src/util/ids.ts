@@ -23,6 +23,7 @@ export const ID_PREFIXES = {
   outreachRisk: 'ork',
   assessment: 'asm',
   contactChannel: 'chn',
+  intentLead: 'itl',
 } as const;
 
 export type IdKind = keyof typeof ID_PREFIXES;

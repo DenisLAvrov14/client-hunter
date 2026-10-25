@@ -94,3 +94,17 @@ Google Maps/Places, 2ГИС, Яндекс, LinkedIn/Facebook/Instagram, всё �
 - **Фаза 3:** почтовый провайдер и его политика холодных писем (см. `docs/email-setup.md`).
 - **До Фазы 4:** PECR + Data (Use and Access) Act 2025 (UK).
 - **До IE/NL/KZ/RU:** юридические пункты разделов 3.3–3.6.
+
+---
+
+## Источники запросов с намерением заказать разработку — проверено 2026-10-25, ждёт подтверждения оператора
+
+Для `npm run intent` (таблица `intent_leads`). Только публичные запросы; без логина, без обхода защит; `robots.txt` проверяется перед каждым запуском.
+
+| Источник | Проверка | Вывод |
+|---|---|---|
+| Hacker News — Algolia Search API (`hn.algolia.com/api/v1`) | `robots.txt` → 404 (ограничений нет по RFC 9309); `search_by_date` и `items/<id>` отвечают без ключа. Страница документации рисуется JavaScript — условия с неё не прочитаны. Официальный API HN ([github.com/HackerNews/API](https://github.com/HackerNews/API)): «There is currently no rate limit». | ✅ использовать вежливо: несколько десятков запросов за запуск, задержка 3 с на домен |
+| UK Contracts Finder — OCDS Search (`Published/Notices/OCDS/Search`) | `robots.txt` пустой; поиск отвечает без авторизации (проверено). В ответе API: `"license": "http://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/"` (OGL v3). [Документация API](https://www.contractsfinder.service.gov.uk/apidocumentation): авторизация нужна для «certain parts» (публикация), лимиты не указаны. | ✅ открытые данные, атрибуция OGL |
+| Reddit | `robots.txt`: `User-agent: * Disallow: /`; Public Content Policy ограничивает использование | ❌ без официального API-доступа не используем |
+| Госзакупки KZ (goszakup.gov.kz) | API требует токен (регистрация) | ⏸ не подключено |
+| Upwork и площадки с платными откликами | условие оператора | ❌ не основной источник |

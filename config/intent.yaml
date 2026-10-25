@@ -1,0 +1,45 @@
+# Buyer-intent lead discovery (npm run intent, docs/decisions.md 2026-10-25).
+# A lead is a PUBLIC request where someone explicitly wants to hire or pay for development work.
+# Sources are public APIs checked against robots.txt; nothing is sent, no login, no paid bidding.
+sources:
+  hn_freelance:        # monthly "Ask HN: Freelancer? Seeking freelancer?" — "SEEKING FREELANCER" = direct client
+    enabled: true
+    months: 6
+  hn_hiring:           # monthly "Ask HN: Who is hiring?" — only contract / freelance roles; permanent jobs = vacancy
+    enabled: true
+    months: 2
+  uk_contracts_finder: # UK public procurement (OCDS API, Open Government Licence) — open tenders only
+    enabled: true
+    days: 30
+    cpv_prefixes: ["72", "48"]      # IT services; software packages
+    large_value_gbp: 250000         # above this: formal bid at company scale — lower fit for a small team
+
+# Our services (lower-case, matched as whole words / phrases). strong = core work, partial = related.
+skills:
+  strong: [website, web app, web application, full-stack, full stack, fullstack, frontend, front-end, backend, back-end,
+    react, next.js, nextjs, vue, vue3, nuxt, node, node.js, typescript, javascript, php, laravel, django, ruby on rails, ruby,
+    python, shopify, woocommerce, wordpress, e-commerce, ecommerce, online shop, api, apis, integration, integrations,
+    automation, bot, telegram, dashboard, booking system, customer portal, portal, crm, saas, postgres, postgresql]
+  partial: [mobile app, flutter, react native, swift, kotlin, android, ios, data, etl, ai, llm, devops, aws, cloud,
+    java, c#, .net, go, golang, rust, elixir, ux, ui]
+
+# Request markers (lower-case substrings).
+markers:
+  # Matched in the start of the post only: a company's own post often mentions "our recruiter" further down.
+  # ("our clients" alone is how consultancies describe their own business — not a recruiter marker.)
+  recruiter: ["on behalf of", "on behalf of our client", "client of ours", "for a client of", "recruiting agency", "staffing agency", "recruitment agency"]
+  closed: ["closed now", "position filled", "role filled", "no longer accepting", "no longer hiring", "[closed]", "(closed)", "filled -"]
+  not_our_work: ["business development", "commission-only", "commission only", "sales representative", "account executive", "recruiter role"]
+  # Roles in a job-post header that are not development work (checked when the header names no developer / engineer).
+  non_dev_roles: ["product manager", "project manager", "designer", "marketing", "sales", "it operations", "operations lead",
+    "creative technologist", "business analyst", "account manager", "customer success", "support specialist"]
+  # Software purchases rather than development: licences, renewals, managed IT.
+  procurement_not_dev: ["licence", "license", "licenses", "licences", "renewal", "managed service provider", "managed it", "cyber security service", "hardware", "laptops", "printers"]
+
+# Geography: we work remotely from outside the US; target markets UK, IE, NL, KZ + worldwide remote.
+geo:
+  target: ["uk", "united kingdom", "london", "england", "scotland", "wales", "ireland", "dublin", "netherlands", "amsterdam",
+    "rotterdam", "europe", "eu", "emea", "cet", "gmt", "worldwide", "anywhere", "global", "kazakhstan"]
+  restricted_other: ["us only", "usa only", "u.s. only", "us citizens", "u.s. citizens", "us-based", "us based only",
+    "remote (us)", "remote (usa)", "remote us", "canada only", "us time zones only", "residents only", "must be located in the us",
+    "united states only", "1099", "w2"]
