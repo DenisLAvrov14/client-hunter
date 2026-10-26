@@ -1,33 +1,44 @@
-// Ranking of buyer-intent requests: explicit willingness to hire/pay, recency and openness, skill
-// match, direct access to the decision-maker, clarity of scope, feasibility of replying. Intent
-// confidence (evidence quality) is kept apart from this commercial score.
+// Ranking of buyer-intent requests: explicit willingness to commission work, fit with our actual
+// services (config/capabilities.yaml), freshness and openness, direct access to the buyer, clarity
+// of scope, feasibility of replying. Intent confidence (evidence quality) is kept apart from this score.
 import { createHash } from 'node:crypto';
+import type { BuyerCategory } from './buyer.js';
+import type { TechFit } from './capabilities.js';
+import { ageDays } from './classify.js';
 import type { ClassifiedRequest } from './types.js';
 
 export interface ScoreParts {
   willingness: number;
   recency: number;
-  skill: number;
+  fit: number;
   access: number;
   clarity: number;
   channel: number;
   total: number;
 }
 
-export function ageDays(c: ClassifiedRequest, now: Date): number | null {
-  return c.publishedAt ? Math.max(0, Math.floor((now.getTime() - new Date(c.publishedAt).getTime()) / 86400_000)) : null;
-}
+const WILLINGNESS: Record<BuyerCategory, number> = {
+  PROJECT_BUYER: 3,
+  SERVICE_RECOMMENDATION: 2.5,
+  AGENCY_PARTNERSHIP: 1.5,
+  POTENTIAL_BUYER: 1,
+  STAFFING: 0,
+  SERVICE_PROVIDER: 0,
+  IRRELEVANT: 0,
+};
+const FIT: Record<TechFit, number> = { core: 3, adjacent: 2, conditional: 1, poor: 0 };
 
 export function score(c: ClassifiedRequest, now = new Date()): ScoreParts {
-  const willingness = { direct_request: 3, contract_role: 2.5, rfp: 2 }[c.requestType as 'direct_request'] ?? 0;
-  const age = ageDays(c, now);
-  // A clear request from yesterday outranks a vague one from months ago.
-  const recency = (age === null ? 0 : age <= 14 ? 3 : age <= 45 ? 2 : age <= 120 ? 1 : 0) + (c.status === 'open' ? 1 : 0);
-  const skill = { high: 3, medium: 2, low: 1, none: 0 }[c.skillFit];
-  const access = c.requestType === 'direct_request' ? 2 : c.requestType === 'contract_role' ? 1.5 : c.requestType === 'rfp' ? 1 : 0;
-  const clarity = (c.budget ? 1 : 0) + (c.technologies.length >= 2 ? 0.5 : 0) + (c.deadline ? 0.5 : 0);
-  const channel = c.contactChannel ? (c.geo === 'target' || c.geo === 'open' ? 1 : 0.5) : 0;
-  return { willingness, recency, skill, access, clarity, channel, total: willingness + recency + skill + access + clarity + channel };
+  const willingness = WILLINGNESS[c.buyerCategory];
+  const age = ageDays(c.publishedAt, now);
+  // Last 7 days first, then the last 30; older only with evidence it is still open.
+  const recency = (age === null ? 0 : age <= 7 ? 3 : age <= 30 ? 2 : age <= 90 ? 0.5 : 0) + (c.status === 'open' ? 1 : 0);
+  const fit = FIT[c.techFit];
+  // The person who needs the work (a merchant, a founder) beats an intermediary or a tender process.
+  const access = c.buyerCategory === 'PROJECT_BUYER' ? (c.requestType === 'rfp' ? 1 : 2) : c.buyerCategory === 'SERVICE_RECOMMENDATION' ? 1.5 : c.buyerCategory === 'AGENCY_PARTNERSHIP' ? 1 : 0;
+  const clarity = (c.budget ? 1 : 0) + (c.fitAreas.length ? 0.5 : 0) + (c.deadline ? 0.5 : 0);
+  const channel = c.contactChannel ? (c.remote === 'permitted' ? 1 : c.remote === 'unknown' ? 0.5 : 0) : 0;
+  return { willingness, recency, fit, access, clarity, channel, total: willingness + recency + fit + access + clarity + channel };
 }
 
 /** Same request reposted (HN companies repost every month): same poster + same normalised header. */
@@ -40,6 +51,8 @@ export interface RankedRequest extends ClassifiedRequest {
   score: ScoreParts;
   /** Older posts of the same request that were collapsed into this one. */
   reposts: string[];
+  /** The URL already appeared in an earlier discovery report (not a new lead). */
+  seenBefore?: string | null;
 }
 
 /** Qualified first, then by score; reposts collapsed into their newest post. */

@@ -1,34 +1,106 @@
-# Buyer-intent lead discovery (npm run intent, docs/decisions.md 2026-10-25).
-# A lead is a PUBLIC request where someone explicitly wants to hire or pay for development work.
-# Sources are public APIs checked against robots.txt; nothing is sent, no login, no paid bidding.
+# Buyer-intent lead discovery (npm run intent, docs/decisions.md 2026-10-25, 2026-10-26).
+# A lead is a PUBLIC request where someone explicitly wants to commission development work.
+# What we deliver lives in config/capabilities.yaml; this file says where to look and how to read intent.
+# Sources are public APIs / feeds checked against robots.txt; nothing is sent, no login, no paid bidding.
 sources:
   hn_freelance:        # monthly "Ask HN: Freelancer? Seeking freelancer?" — "SEEKING FREELANCER" = direct client
     enabled: true
-    months: 6
-  hn_hiring:           # monthly "Ask HN: Who is hiring?" — only contract / freelance roles; permanent jobs = vacancy
-    enabled: true
     months: 2
-  uk_contracts_finder: # UK public procurement (OCDS API, Open Government Licence) — open tenders only
+  hn_hiring:           # monthly "Ask HN: Who is hiring?" — jobs and contract roles: staffing, kept for the funnel only
+    enabled: false
+    months: 1
+  uk_contracts_finder: # UK public procurement (OCDS API, Open Government Licence)
     enabled: true
     days: 30
     cpv_prefixes: ["72", "48"]      # IT services; software packages
-    large_value_gbp: 250000         # above this: formal bid at company scale — lower fit for a small team
+    large_value_gbp: 250000         # above this: formal tender at company scale — excluded from the shortlist
+  forums:
+    days: 30
+    feeds:
+      # Business-owner communities (robots.txt checked 2026-10-26, docs/verification-log.md).
+      - id: ukbf_looking_for
+        label: "UK Business Forums — I'm Looking For A..."
+        enabled: true
+        kind: rss
+        url: https://www.ukbusinessforums.co.uk/forums/im-looking-for-a.88/index.rss
+      - id: ukbf_websites
+        label: "UK Business Forums — Websites & Ecommerce"
+        enabled: true
+        kind: rss
+        url: https://www.ukbusinessforums.co.uk/forums/websites-ecommerce.59/index.rss
+      - id: ukbf_it
+        label: "UK Business Forums — IT & Internet"
+        enabled: true
+        kind: rss
+        url: https://www.ukbusinessforums.co.uk/forums/it-internet.56/index.rss
+      - id: ukbf_startup
+        label: "UK Business Forums — Start Up Space"
+        enabled: true
+        kind: rss
+        url: https://www.ukbusinessforums.co.uk/forums/start-up-space.144/index.rss
+      - id: ukbf_general
+        label: "UK Business Forums — General Business Forum"
+        enabled: true
+        kind: rss
+        url: https://www.ukbusinessforums.co.uk/forums/general-business-forum.47/index.rss
+      - id: higherlevel
+        label: "HigherLevel.nl — форум предпринимателей (все разделы)"
+        enabled: true
+        kind: rss
+        url: https://www.higherlevel.nl/rss/2-forum.xml/
+      # WordPress job board: mostly vacancies, but founders post store / site projects here too.
+      - id: wp_jobs
+        label: "jobs.wordpress.net"
+        enabled: true
+        kind: rss
+        url: https://jobs.wordpress.net/feed/
+        reply: "по инструкции в объявлении на jobs.wordpress.net (что прислать и куда)"
+      # Merchant community: request-like titles only in the busy categories.
+      - id: shopify_community
+        label: "Shopify Community"
+        enabled: true
+        kind: discourse
+        url: https://community.shopify.com
+        max_pages: 4
+        categories:
+          - { path: job-listings/334, all: true }
+          - { path: shopify-discussion/95, all: false }
+          - { path: store-design/133, all: false }
+          - { path: technical-qa/211, all: false }
+          - { path: start-a-business/282, all: false }
+          - { path: shopify-apps/186, all: false }
+      # Platform-specialist communities: mostly Bubble / n8n specialist roles — secondary, off by default.
+      - id: bubble_jobs
+        label: "Bubble Forum — Jobs/Freelance"
+        enabled: false
+        secondary: true
+        kind: discourse
+        url: https://forum.bubble.io
+        categories: [{ path: jobs-freelance/13, all: true }]
+      - id: n8n_jobs
+        label: "n8n Community — Jobs"
+        enabled: false
+        secondary: true
+        kind: discourse
+        url: https://community.n8n.io
+        categories: [{ path: jobs/13, all: true }]
+      - id: make_hire
+        label: "Make Community — Hire a Pro / Hire help"
+        enabled: false
+        secondary: true
+        kind: discourse
+        url: https://community.make.com
+        categories: [{ path: hire-a-pro/hire-help/74, all: true }]
 
-# Our services (lower-case, matched as whole words / phrases). strong = core work, partial = related.
-skills:
-  strong: [website, web app, web application, full-stack, full stack, fullstack, frontend, front-end, backend, back-end,
-    react, next.js, nextjs, vue, vue3, nuxt, node, node.js, typescript, javascript, php, laravel, django, ruby on rails, ruby,
-    python, shopify, woocommerce, wordpress, e-commerce, ecommerce, online shop, api, apis, integration, integrations,
-    automation, bot, telegram, dashboard, booking system, customer portal, portal, crm, saas, postgres, postgresql]
-  partial: [mobile app, flutter, react native, swift, kotlin, android, ios, data, etl, ai, llm, devops, aws, cloud,
-    java, c#, .net, go, golang, rust, elixir, ux, ui]
+max_age_days: 30
 
 # Request markers (lower-case substrings).
 markers:
   # Matched in the start of the post only: a company's own post often mentions "our recruiter" further down.
-  # ("our clients" alone is how consultancies describe their own business — not a recruiter marker.)
   recruiter: ["on behalf of", "on behalf of our client", "client of ours", "for a client of", "recruiting agency", "staffing agency", "recruitment agency"]
-  closed: ["closed now", "position filled", "role filled", "no longer accepting", "no longer hiring", "[closed]", "(closed)", "filled -"]
+  # Matched in the title / header: the author says it is done.
+  closed: ["closed now", "position filled", "role filled", "no longer accepting", "no longer hiring", "[closed]", "(closed)", "filled -",
+    "[solved]", "(solved)", "[sorted]", "(sorted)", "now sorted", "found someone", "no longer needed", "[opgelost]", "(opgelost)"]
   not_our_work: ["business development", "commission-only", "commission only", "sales representative", "account executive", "recruiter role"]
   # Roles in a job-post header that are not development work (checked when the header names no developer / engineer).
   non_dev_roles: ["product manager", "project manager", "designer", "marketing", "sales", "it operations", "operations lead",
@@ -36,10 +108,72 @@ markers:
   # Software purchases rather than development: licences, renewals, managed IT.
   procurement_not_dev: ["licence", "license", "licenses", "licences", "renewal", "managed service provider", "managed it", "cyber security service", "hardware", "laptops", "printers"]
 
-# Geography: we work remotely from outside the US; target markets UK, IE, NL, KZ + worldwide remote.
+# What the author wants. Phrases, lower-case; English and Dutch (HigherLevel).
+buyer:
+  # Explicit intent to commission / pay.
+  project: ["looking for a developer", "looking for a web developer", "looking for a freelancer", "looking for an agency",
+    "looking for a programmer", "looking for someone to build", "looking for someone to develop", "looking for someone to create",
+    "looking for someone to help build", "looking for a company to build", "need someone to build", "need someone to develop",
+    "need a developer", "need a web developer", "need a programmer", "need an agency", "want someone to build",
+    "hire a developer", "hire a freelancer", "hire someone", "to hire", "seeking freelancer", "seeking a developer",
+    "seeking a freelancer", "app or freelancer", "who can build", "can anyone build", "anyone able to build", "developer wanted",
+    "developer needed", "web developer to build",
+    "ik zoek een ontwikkelaar", "ik zoek een programmeur", "ik zoek een webbouwer", "ik zoek een bureau", "ik zoek een developer",
+    "wij zoeken een ontwikkelaar", "wij zoeken een developer", "gezocht: ontwikkelaar", "gezocht: developer"]
+  # Money / quote phrases: intent only when the post also names a provider or a build verb (see build_verbs) —
+  # "I will pay €100 a year to register" or "a quote for shipping" is not a development purchase.
+  payment: ["quote for", "quotes for", "looking for quotes", "budget is", "budget of", "my budget", "our budget", "willing to pay",
+    "happy to pay", "will pay", "paid project", "paid work", "fixed price", "fixed-price", "price for each", "send your rate",
+    "your rate", "rate and timeline", "offerte"]
+  build_verbs: [build, built, develop, developed, development, create, design and build, implement, integrate, connect, migrate,
+    automate, rebuild, redesign, fix, set up, building, developing, creating, implementing, integrating, connecting, migrating,
+    automating, rebuilding, redesigning, fixing, bouwen, ontwikkelen, koppelen, maken]
+  # "<ask> [up to 3 words] <provider noun>": "looking for an experienced Shopify developer", "need someone to…".
+  ask: ["looking for", "look for", "need", "needs", "needed", "seeking", "want", "hire", "hiring", "require", "requires",
+    "zoek", "zoeken", "gezocht"]
+  # Asking others to recommend a provider (needs a provider noun nearby: see provider_nouns).
+  recommendation: ["recommend a", "recommend an", "recommend any", "recommend someone", "recommendations for", "recommendations please",
+    "any recommendations", "can anyone recommend", "can anybody recommend", "could anyone recommend", "suggestions for a",
+    "who do you use", "who would you recommend", "know a good", "know any good", "kan iemand een", "iemand een goede",
+    "aanraden", "aanbevelen", "tips voor een goede"]
+  provider_nouns: [developer, developers, web developer, web designer, web design company, agency, agencies, freelancer, freelancers,
+    programmer, programmers, coder, expert, specialist, consultant, company, firm, studio, someone, somebody, ontwikkelaar,
+    programmeur, webbouwer, bureau, partij, shopify expert, shopify partner]
+  # A software need, without a stated willingness to hire: potential buyer only.
+  # Matched in the title and the opening of the post only (an article's "how do I" further down is not a need).
+  need: ["we need", "i need", "i want to", "we want to", "how can i", "how do i", "is it possible", "would like to", "planning to",
+    "thinking of", "help with", "help needed", "need help", "advice needed", "what has worked", "what's everyone doing",
+    "what is everyone doing", "ik wil", "wij willen", "hoe kan ik"]
+  # Staff augmentation / employment, not a deliverable.
+  staffing: ["full-time", "full time", "permanent role", "permanent position", "salary", "per annum", "contract-to-hire", "contract to hire",
+    "join our team", "we are hiring", "we're hiring", "vacancy", "in-house", "employee", "staff augmentation", "dedicated developer",
+    "hours per week", "hours a week", "hrs/week", "hours/week", "ongoing part-time", "part-time role", "part-time", "part time",
+    "minimum 50%", "vacature", "in loondienst", "fte"]
+  # Author advertises their own services (checked in the title and the first lines).
+  service_provider: ["[for hire]", "for hire", "available for hire", "hire me", "i offer", "we offer", "i build", "we build",
+    "i am a developer", "i'm a developer", "i am a freelance", "i'm a freelance", "we are a web", "we are a digital", "we are an agency",
+    "my services", "our services", "my portfolio", "free audit", "looking for clients", "looking for merchants", "looking for stores",
+    "looking for feedback", "beta testers", "early access", "i built", "we built", "i made", "[available]", "(available)",
+    "i'm available", "i am available", "available to help", "open to remote opportunities", "open to new projects",
+    "open to opportunities", "open to work", "taking on new projects", "ik bied", "wij bieden"]
+  # An agency looking for a technical subcontractor.
+  # ("development partner" is how founders describe an agency they would hire — not a partnership marker.)
+  agency_partnership: ["white-label", "white label", "whitelabel", "subcontract", "sub-contract", "subcontractor", "sub-contractor",
+    "agency partner", "overflow work", "for our clients"]
+  # Work for equity / profit share only: not a paying buyer.
+  equity_only: ["equity", "co-founder", "cofounder", "technical partner", "profit share", "profit-share", "revenue share", "sweat equity",
+    "aandelen", "mede-oprichter"]
+  # Signals that the post is about software at all (besides the capability profile).
+  software: [website, web site, app, application, software, platform, portal, system, tool, developer, programmer, webshop,
+    online store, online shop, integration, automation, saas, mvp, plugin, theme]
+
+# Geography: we work remotely; target markets UK, IE, NL, KZ + worldwide remote.
 geo:
-  target: ["uk", "united kingdom", "london", "england", "scotland", "wales", "ireland", "dublin", "netherlands", "amsterdam",
+  target: ["uk", "united kingdom", "london", "england", "scotland", "wales", "ireland", "dublin", "netherlands", "nederland", "amsterdam",
     "rotterdam", "europe", "eu", "emea", "cet", "gmt", "worldwide", "anywhere", "global", "kazakhstan"]
-  restricted_other: ["us only", "usa only", "u.s. only", "us citizens", "u.s. citizens", "us-based", "us based only",
+  restricted_other: ["us only", "usa only", "u.s. only", "us citizens", "u.s. citizens", "us-based", "us based only", "united states-based",
     "remote (us)", "remote (usa)", "remote us", "canada only", "us time zones only", "residents only", "must be located in the us",
     "united states only", "1099", "w2"]
+  # Buyer wants someone in person: remote contractors not allowed.
+  local_only: ["must be local", "local developer", "local to", "in person", "face to face", "face-to-face", "on-site", "onsite",
+    "come to our office", "near me", "in de buurt"]

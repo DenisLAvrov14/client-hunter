@@ -7,7 +7,7 @@ import { loadConfig, type Config } from '../src/config/load.js';
 import { openDb } from '../src/db/connection.js';
 import { migrate } from '../src/db/migrate.js';
 import type { Fetcher, FetchResult } from '../src/inspect/fetcher.js';
-import { classify } from '../src/intent/classify.js';
+import { classify as classifyAt } from '../src/intent/classify.js';
 import { checkAmbiguous } from '../src/intent/llmCheck.js';
 import { contentHash, rankRequests } from '../src/intent/rank.js';
 import { fetchContractsFinder, releaseToRequest } from '../src/intent/sources/contractsFinder.js';
@@ -22,6 +22,7 @@ import { intentCsv, intentMarkdown } from '../src/reports/intent.js';
 const config = loadConfig();
 const cfg = config.intent;
 const NOW = new Date('2026-10-25T12:00:00Z');
+const classify = (r: RawRequest, c: Config) => classifyAt(r, c, { now: NOW });
 
 class JsonFetcher implements Fetcher {
   readonly urls: string[] = [];
@@ -92,61 +93,59 @@ describe('HN source', () => {
 
 describe('classification: buyer intent vs everything else', () => {
   it('"SEEKING FREELANCER" is a direct request; "SEEKING WORK" is a developer offering services', () => {
-    const want = classify(hn('hn_freelance', 'SEEKING FREELANCER | Remote (US+EU only)\nStack: Vue3, Ruby+Sinatra, Postgres. We need a full-stack developer for our platform.'), cfg);
+    const want = classify(hn('hn_freelance', 'SEEKING FREELANCER | Remote (US+EU only)\nStack: Vue3, Ruby+Sinatra, Postgres. We need a full-stack developer for our platform.'), config);
     expect(want).toMatchObject({ requestType: 'direct_request', engagement: 'contractor', qualified: true, intentConfidence: 'high' });
     expect(want.evidenceQuote).toBe('SEEKING FREELANCER | Remote (US+EU only)');
     expect(want.contactChannel).toContain('ответ на комментарий в HN');
-    const offer = classify(hn('hn_freelance', 'SEEKING WORK | Remote | React, Node, TypeScript developer'), cfg);
+    const offer = classify(hn('hn_freelance', 'SEEKING WORK | Remote | React, Node, TypeScript developer'), config);
     expect(offer).toMatchObject({ requestType: 'service_offer', qualified: false });
   });
 
-  it('a contract role with our stack qualifies; a permanent job is a vacancy, labelled apart', () => {
-    const contract = classify(hn('hn_hiring', 'Obi9 | Full-Stack Engineer | REMOTE (US time zones) | Contract or Full-time\nReact, Node, TypeScript, Python'), cfg);
-    expect(contract).toMatchObject({ requestType: 'contract_role', engagement: 'contractor', geo: 'open', qualified: true });
-    const job = classify(hn('hn_hiring', 'HiO | Senior Engineer | REMOTE | Full-time\nReact, Node'), cfg);
-    expect(job).toMatchObject({ requestType: 'vacancy', engagement: 'employee', qualified: false });
+  it('a contract role is staffing, not a commissioned deliverable; a permanent job is a vacancy', () => {
+    const contract = classify(hn('hn_hiring', 'Obi9 | Full-Stack Engineer | REMOTE (US time zones) | Contract or Full-time\nReact, Node, TypeScript, Python'), config);
+    expect(contract).toMatchObject({ requestType: 'contract_role', engagement: 'contractor', geo: 'open', buyerCategory: 'STAFFING', techFit: 'core', qualified: false });
+    const job = classify(hn('hn_hiring', 'HiO | Senior Engineer | REMOTE | Full-time\nReact, Node'), config);
+    expect(job).toMatchObject({ requestType: 'vacancy', engagement: 'employee', buyerCategory: 'STAFFING', qualified: false });
   });
 
   it('closed only on an explicit marker; otherwise "unknown", never assumed open', () => {
-    const closed = classify(hn('hn_hiring', 'OpenSanctions | Product Engineer | REMOTE | Freelance / employment | CLOSED NOW - STOP SENDING\nPython, React'), cfg);
+    const closed = classify(hn('hn_hiring', 'OpenSanctions | Product Engineer | REMOTE | Freelance / employment | CLOSED NOW - STOP SENDING\nPython, React'), config);
     expect(closed).toMatchObject({ status: 'closed', qualified: false });
-    const open = classify(hn('hn_hiring', 'Jawa.gg | Software Engineer | remote | Contract or Full Time\nFull-stack: Next.js, Node, TypeScript, Postgres'), cfg);
+    const open = classify(hn('hn_hiring', 'Jawa.gg | Software Engineer | remote | Contract or Full Time\nFull-stack: Next.js, Node, TypeScript, Postgres'), config);
     expect(open.status).toBe('unknown');
     expect(open.statusBasis).toContain('судить только по дате');
   });
 
   it('geography: on-site only, or remote limited to named countries outside our markets, is not reachable', () => {
-    expect(classify(hn('hn_hiring', 'Workday | AI Creative Technologist | Pleasanton, CA | ONSITE | Contract\nAPIs, integrations'), cfg)).toMatchObject({ geo: 'restricted_other', qualified: false });
-    expect(classify(hn('hn_hiring', 'Vistulo | Senior React engineers | REMOTE (Poland or Romania) | B2B contract\nReact, TypeScript'), cfg).geo).toBe('restricted_other');
-    expect(classify(hn('hn_hiring', 'Revieve Oy | Senior Product Engineer | REMOTE [Europe / (GMT+2)] | Contract\nbackend, react, typescript'), cfg).geo).toBe('target');
+    expect(classify(hn('hn_hiring', 'Workday | AI Creative Technologist | Pleasanton, CA | ONSITE | Contract\nAPIs, integrations'), config)).toMatchObject({ geo: 'restricted_other', qualified: false });
+    expect(classify(hn('hn_hiring', 'Vistulo | Senior React engineers | REMOTE (Poland or Romania) | B2B contract\nReact, TypeScript'), config).geo).toBe('restricted_other');
+    expect(classify(hn('hn_hiring', 'Revieve Oy | Senior Product Engineer | REMOTE [Europe / (GMT+2)] | Contract\nbackend, react, typescript'), config).geo).toBe('target');
   });
 
   it('job posts: the role in the header decides, not the company stack in the body', () => {
-    const pm = classify(hn('hn_hiring', 'ODK | Senior Product Manager | Remote (Worldwide) | Long-term contract\nOur SaaS uses React and Node.'), cfg);
-    expect(pm).toMatchObject({ skillFit: 'none', qualified: false });
-    const negated = classify(hn('hn_hiring', 'Search Atlas | Product Engineer (Product Manager role, not a Full-stack role) | REMOTE (anywhere) | Full-time contractor\nReact, Django, Python, API'), cfg);
-    expect(negated).toMatchObject({ skillFit: 'none', qualified: false });
-    const swift = classify(hn('hn_hiring', 'Pairio | Senior Swift Engineer | REMOTE (Europe) | Employee or freelance\nOur backend is Rails.'), cfg);
-    expect(swift).toMatchObject({ skillFit: 'low', qualified: false });
-    // Skills only in the body count one level lower: "website" alone no longer qualifies.
-    const bodyOnly = classify(hn('hn_hiring', 'EggAI | Platform engineers | REMOTE (EU) | Contract possible.\nSee our website.'), cfg);
-    expect(bodyOnly.skillFit).toBe('low');
+    const pm = classify(hn('hn_hiring', 'ODK | Senior Product Manager | Remote (Worldwide) | Long-term contract\nOur SaaS uses React and Node.'), config);
+    expect(pm).toMatchObject({ techFit: 'poor', qualified: false });
+    const negated = classify(hn('hn_hiring', 'Search Atlas | Product Engineer (Product Manager role, not a Full-stack role) | REMOTE (anywhere) | Full-time contractor\nReact, Django, Python, API'), config);
+    expect(negated).toMatchObject({ techFit: 'poor', qualified: false });
+    const swift = classify(hn('hn_hiring', 'Pairio | Senior Swift Engineer | REMOTE (Europe) | Employee or freelance\nOur backend is Rails.'), config);
+    // Swift in the role line is a requirement for native iOS work we do not offer.
+    expect(swift).toMatchObject({ techFit: 'poor', mandatoryTech: ['swift'], qualified: false });
   });
 
   it('recruiters: a marker at the start of the post, not "our recruiter" further down', () => {
-    expect(classify(hn('hn_hiring', 'Virtasant (1099 contractor for a client of ours) | Remote (USA) | full-time\nReact'), cfg).requestType).toBe('recruiter');
-    const own = classify(hn('hn_hiring', `Discord | Engineer | REMOTE | Contract\nReact, TypeScript, Node.${' x'.repeat(200)} Email our recruiter.`), cfg);
+    expect(classify(hn('hn_hiring', 'Virtasant (1099 contractor for a client of ours) | Remote (USA) | full-time\nReact'), config).requestType).toBe('recruiter');
+    const own = classify(hn('hn_hiring', `Discord | Engineer | REMOTE | Contract\nReact, TypeScript, Node.${' x'.repeat(200)} Email our recruiter.`), config);
     expect(own.requestType).toBe('contract_role');
   });
 
   it('contract work that is not development (business development, commission-only) does not qualify', () => {
-    const bd = classify(hn('hn_hiring', 'Irash Tech | Business Development Manager (Freelance, Commission-only) | REMOTE (Worldwide) | Contract'), cfg);
+    const bd = classify(hn('hn_hiring', 'Irash Tech | Business Development Manager (Freelance, Commission-only) | REMOTE (Worldwide) | Contract'), config);
     expect(bd.qualified).toBe(false);
     expect(bd.reasons.join(' ')).toContain('не наша работа');
   });
 
   it('a "contract" mention only in the body is ambiguous — left to the optional LLM check', () => {
-    expect(classify(hn('hn_hiring', 'Acme | Engineer | REMOTE\nWe also take contractors. React, Node.'), cfg)).toMatchObject({ requestType: 'vacancy', ambiguous: true });
+    expect(classify(hn('hn_hiring', 'Acme | Engineer | REMOTE\nWe also take contractors. React, Node.'), config)).toMatchObject({ requestType: 'vacancy', ambiguous: true });
   });
 });
 
@@ -173,16 +172,16 @@ describe('UK Contracts Finder', () => {
   it('an open IT tender: status and deadline from the notice, procurement contact as published, notice URL', () => {
     const r = releaseToRequest(release(), cfg.sources.uk_contracts_finder.cpv_prefixes, NOW)!;
     expect(r).toMatchObject({ url: 'https://www.contractsfinder.service.gov.uk/Notice/aeb37bc4-61d8-40de-b087-2908571083bf', organisation: 'Example Council', contact: 'procurement@example.gov.uk', budget: '40000 GBP' });
-    const c = classify(r, cfg);
+    const c = classify(r, config);
     expect(c).toMatchObject({ requestType: 'rfp', status: 'open', engagement: 'agency', qualified: true, intentConfidence: 'high' });
     expect(c.statusBasis).toContain('2026-11-10');
   });
 
   it('expired deadline, "Awarded", or a licence renewal never qualify; other CPV groups are not read', () => {
     const p = cfg.sources.uk_contracts_finder.cpv_prefixes;
-    expect(classify(releaseToRequest(release({}, { tenderPeriod: { endDate: '2026-09-01T00:00:00Z' } }), p, NOW)!, cfg).status).toBe('closed');
-    expect(classify(releaseToRequest(release({}, { description: 'Awarded' }), p, NOW)!, cfg).status).toBe('closed');
-    expect(classify(releaseToRequest(release({}, { title: 'Adobe Licenses renewal', description: 'Adobe licences due for renewal.' }), p, NOW)!, cfg).requestType).toBe('irrelevant');
+    expect(classify(releaseToRequest(release({}, { tenderPeriod: { endDate: '2026-09-01T00:00:00Z' } }), p, NOW)!, config).status).toBe('closed');
+    expect(classify(releaseToRequest(release({}, { description: 'Awarded' }), p, NOW)!, config).status).toBe('closed');
+    expect(classify(releaseToRequest(release({}, { title: 'Adobe Licenses renewal', description: 'Adobe licences due for renewal.' }), p, NOW)!, config).requestType).toBe('irrelevant');
     expect(releaseToRequest(release({}, { classification: { id: '45233210', description: 'Surface work for highways' } }), p, NOW)).toBeNull();
   });
 
@@ -200,21 +199,24 @@ describe('UK Contracts Finder', () => {
 
 describe('ranking and storage', () => {
   it('a clear recent request outranks an old one; the same post reposted monthly is collapsed', () => {
-    const fresh = classify(hn('hn_freelance', 'SEEKING FREELANCER | Remote\nFull-stack React + Node web app, $5k budget', { publishedAt: '2026-10-24T00:00:00.000Z', author: 'new', itemId: '1' }), cfg);
-    const old = classify(hn('hn_freelance', 'SEEKING FREELANCER | Remote\nFull-stack React + Node web app', { publishedAt: '2026-05-01T00:00:00.000Z', author: 'old', itemId: '2' }), cfg);
-    const sept = classify(hn('hn_hiring', 'Obi9 | Full-Stack Engineer | REMOTE | Contract\nReact, Node', { publishedAt: '2026-09-11T00:00:00.000Z', itemId: '3', url: 'https://news.ycombinator.com/item?id=3' }), cfg);
-    const oct = classify(hn('hn_hiring', 'Obi9 | Full-Stack Engineer | REMOTE | Contract\nReact, Node', { publishedAt: '2026-10-02T00:00:00.000Z', itemId: '4', url: 'https://news.ycombinator.com/item?id=4' }), cfg);
+    const fresh = classify(hn('hn_freelance', 'SEEKING FREELANCER | Remote\nFull-stack React + Node web app, $5k budget', { publishedAt: '2026-10-24T00:00:00.000Z', author: 'new', itemId: '1' }), config);
+    const old = classify(hn('hn_freelance', 'SEEKING FREELANCER | Remote\nFull-stack React + Node web app', { publishedAt: '2026-05-01T00:00:00.000Z', author: 'old', itemId: '2' }), config);
+    const sept = classify(hn('hn_hiring', 'Obi9 | Full-Stack Engineer | REMOTE | Contract\nReact, Node', { publishedAt: '2026-09-11T00:00:00.000Z', itemId: '3', url: 'https://news.ycombinator.com/item?id=3' }), config);
+    const oct = classify(hn('hn_hiring', 'Obi9 | Full-Stack Engineer | REMOTE | Contract\nReact, Node', { publishedAt: '2026-10-02T00:00:00.000Z', itemId: '4', url: 'https://news.ycombinator.com/item?id=4' }), config);
     expect(contentHash(sept)).toBe(contentHash(oct));
     const ranked = rankRequests([old, sept, oct, fresh], NOW);
-    expect(ranked.map((r) => r.author ?? r.organisation)).toEqual(['new', 'someone', 'old']);
-    expect(ranked[1]).toMatchObject({ itemId: '4', reposts: ['https://news.ycombinator.com/item?id=3'] });
+    // Qualified first; the old direct request outranks the contract role (staffing scores no willingness).
+    expect(ranked.map((r) => r.author ?? r.organisation)).toEqual(['new', 'old', 'someone']);
+    expect(ranked[0]!.qualified).toBe(true);
+    expect(ranked[1]!.reasons.join(' ')).toContain('старше 30 дн.');
+    expect(ranked[2]).toMatchObject({ itemId: '4', reposts: ['https://news.ycombinator.com/item?id=3'] });
     expect(fresh.budget).toBe('$5k');
   });
 
   it('saved once per source item; a later run updates the classification and keeps first_seen_at', () => {
     const db = openDb(':memory:');
     migrate(db);
-    const c = classify(hn('hn_freelance', 'SEEKING FREELANCER | Remote\nReact, Node web app', { itemId: '42' }), cfg);
+    const c = classify(hn('hn_freelance', 'SEEKING FREELANCER | Remote\nReact, Node web app', { itemId: '42' }), config);
     expect(saveRequests(db, [c], '2026-10-25T00:00:00.000Z')).toEqual({ inserted: 1, updated: 0 });
     expect(saveRequests(db, [{ ...c, status: 'closed' }], '2026-10-26T00:00:00.000Z')).toEqual({ inserted: 0, updated: 1 });
     expect(db.prepare('SELECT status, first_seen_at, last_seen_at, qualified, request_type FROM intent_leads').all()).toEqual([
@@ -223,10 +225,12 @@ describe('ranking and storage', () => {
   });
 
   it('the report links every original request and labels status honestly', () => {
-    const list = rankRequests([classify(hn('hn_freelance', 'SEEKING FREELANCER | Remote\nReact, Node web app', { url: 'https://news.ycombinator.com/item?id=48361270' }), cfg)], NOW);
+    const list = rankRequests([classify(hn('hn_freelance', 'SEEKING FREELANCER | Remote\nReact, Node web app', { url: 'https://news.ycombinator.com/item?id=48361270' }), config)], NOW);
     const md = intentMarkdown(list, { generatedAt: NOW, sources: [{ source: 'hn_freelance', scanned: 1, requests: 1, note: '' }], unavailable: ['Reddit — robots.txt'], llm: 'только правила, без LLM' });
     expect(md).toContain('- **Оригинал:** https://news.ycombinator.com/item?id=48361270');
-    expect(md).toContain('❔ неизвестно — источник не сообщает');
+    expect(md).toContain('❔ UNKNOWN — источник не сообщает');
+    expect(md).toContain('## 1. Прямые заказчики — 1');
+    expect(md).toContain('**Из них CORE_FIT:** 1');
     expect(md).toContain('Reddit — robots.txt');
     expect(intentCsv(list).split('\n')[1]).toMatch(/^yes,.*,https:\/\/news\.ycombinator\.com\/item\?id=48361270,hn_freelance,/);
   });
@@ -251,7 +255,7 @@ describe('optional LLM check (paid, off by default)', () => {
     const db = openDb(':memory:');
     migrate(db);
     const llm = new FakeLlm([{ request_type: 'contract_role', engagement: 'contractor', evidence_quote: 'We also take freelance contractors', reason: 'r' }]);
-    const res = await checkAmbiguous(raws, [classify(ambiguousRaw, cfg), classify(clearRaw, cfg)], { config, llm, budget: new Budget(db, config) });
+    const res = await checkAmbiguous(raws, [classify(ambiguousRaw, config), classify(clearRaw, config)], { config, llm, budget: new Budget(db, config) });
     expect(llm.requests).toHaveLength(1);
     expect(res).toMatchObject({ checked: 1, accepted: 1 });
     expect(res.list[0]).toMatchObject({ requestType: 'contract_role', classifier: 'llm', evidenceQuote: 'We also take freelance contractors' });
@@ -261,7 +265,7 @@ describe('optional LLM check (paid, off by default)', () => {
   it('an invented quote is rejected; the budget stops checks before any request', async () => {
     const db = openDb(':memory:');
     migrate(db);
-    const invented = await checkAmbiguous(raws, [classify(ambiguousRaw, cfg)], {
+    const invented = await checkAmbiguous(raws, [classify(ambiguousRaw, config)], {
       config,
       llm: new FakeLlm([{ request_type: 'direct_request', engagement: 'contractor', evidence_quote: 'We will pay $10k', reason: 'r' }]),
       budget: new Budget(db, config),
@@ -270,7 +274,7 @@ describe('optional LLM check (paid, off by default)', () => {
     expect(invented.list[0]!.reasons.join(' ')).toContain('цитаты нет в тексте');
     const broke: Config = { ...config, limits: { ...config.limits, max_llm_cost_usd_per_run: 0 } };
     const llm = new FakeLlm([]);
-    const stopped = await checkAmbiguous(raws, [classify(ambiguousRaw, cfg)], { config: broke, llm, budget: new Budget(db, broke) });
+    const stopped = await checkAmbiguous(raws, [classify(ambiguousRaw, config)], { config: broke, llm, budget: new Budget(db, broke) });
     expect(stopped.stoppedByBudget).toBe(true);
     expect(llm.requests).toHaveLength(0);
   });

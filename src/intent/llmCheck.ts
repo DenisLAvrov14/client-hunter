@@ -72,7 +72,7 @@ export async function checkAmbiguous(
       const quote = res.data.evidence_quote.trim();
       if (quote.length >= 4 && norm(c.text).includes(norm(quote))) {
         accepted++;
-        out.push(classify(raws.get(`${c.source}:${c.itemId}`)!, deps.config.intent, { type: res.data.request_type, engagement: res.data.engagement, evidenceQuote: quote }));
+        out.push(classify(raws.get(`${c.source}:${c.itemId}`)!, deps.config, { override: { type: res.data.request_type, engagement: res.data.engagement, evidenceQuote: quote } }));
       } else {
         out.push({ ...c, reasons: [...c.reasons, 'проверка LLM отклонена: её цитаты нет в тексте запроса'] });
       }

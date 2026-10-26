@@ -31,6 +31,12 @@ export function hasTerm(textLower: string, term: string): boolean {
   return new RegExp(`(?<![\\p{L}\\p{N}])${esc}(?![\\p{L}\\p{N}])`, 'u').test(textLower);
 }
 
+/** hasTerm, also accepting a plural of the term's last word ("dashboards", "landing pages", "businesses"). */
+export function hasTermOrPlural(textLower: string, term: string): boolean {
+  const esc = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?<![\\p{L}\\p{N}])${esc}(?:s|es)?(?![\\p{L}\\p{N}])`, 'u').test(textLower);
+}
+
 /** The line of `text` containing the first match of `re`, verbatim (cut at `max` characters, never edited). */
 export function quoteAround(text: string, re: RegExp, max = 220): string {
   const m = re.exec(text);

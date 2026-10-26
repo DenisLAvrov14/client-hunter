@@ -205,6 +205,22 @@ export const SegmentSchema = z.looseObject({
 
 const words = z.array(z.string().min(1).regex(/^[^A-Z]*$/, 'lower-case only')).min(1);
 
+const ForumFeed = z.strictObject({
+  id: z.string().regex(/^[a-z0-9_]+$/),
+  label: z.string().min(1),
+  enabled: z.boolean(),
+  /** secondary: platform-specialist communities (Bubble, n8n…) — kept, but off unless asked for. */
+  secondary: z.boolean().default(false),
+  kind: z.enum(['rss', 'discourse']),
+  /** rss: the feed URL. discourse: the forum base URL. */
+  url: z.url(),
+  /** discourse only: "slug/id" categories; `all: false` = read only topics whose title looks like a request. */
+  categories: z.array(z.strictObject({ path: z.string().regex(/^[a-z0-9-]+(?:\/[a-z0-9-]+)*\/\d+$/), all: z.boolean() })).default([]),
+  max_pages: z.number().int().min(1).max(20).default(3),
+  /** How a reader replies at this source (operator-facing, Russian); default: a reply in the thread. */
+  reply: z.string().min(1).optional(),
+});
+
 /** Buyer-intent discovery (config/intent.yaml). */
 export const IntentSchema = z.strictObject({
   sources: z.strictObject({
@@ -216,14 +232,51 @@ export const IntentSchema = z.strictObject({
       cpv_prefixes: z.array(z.string().regex(/^\d{2,8}$/)).min(1),
       large_value_gbp: z.number().positive(),
     }),
+    forums: z.strictObject({ days: z.number().int().min(1).max(365), feeds: z.array(ForumFeed).min(1) }),
   }),
-  skills: z.strictObject({ strong: words, partial: words }),
+  /** Older requests are reported but not shortlisted unless the source says they are open. */
+  max_age_days: z.number().int().min(1).max(365),
   markers: z.strictObject({ recruiter: words, closed: words, not_our_work: words, non_dev_roles: words, procurement_not_dev: words }),
-  geo: z.strictObject({ target: words, restricted_other: words }),
+  /** What the post says the author wants (lower-case phrases). */
+  buyer: z.strictObject({
+    project: words,
+    payment: words,
+    build_verbs: words,
+    ask: words,
+    recommendation: words,
+    provider_nouns: words,
+    need: words,
+    staffing: words,
+    service_provider: words,
+    agency_partnership: words,
+    equity_only: words,
+    software: words,
+  }),
+  geo: z.strictObject({ target: words, restricted_other: words, local_only: words }),
+});
+
+/** Service Capability Profile (config/capabilities.yaml): what we deliver, in one place. */
+export const CapabilitiesSchema = z.strictObject({
+  areas: z.record(
+    z.string().regex(/^[a-z0-9_]+$/),
+    z.strictObject({ label: z.string().min(1), fit: z.enum(['core', 'conditional']), technologies: words, services: words }),
+  ),
+  poor_fit: z.strictObject({
+    platforms: words,
+    native_mobile: words,
+    games: words,
+    specialist_platforms: words,
+    enterprise_stack: words,
+    data_science: words,
+    non_dev: words,
+    alternatives_ok: words,
+  }),
 });
 
 export type AppConfig = z.infer<typeof AppSchema>;
 export type IntentConfig = z.infer<typeof IntentSchema>;
+export type ForumFeedConfig = z.infer<typeof ForumFeed>;
+export type CapabilitiesConfig = z.infer<typeof CapabilitiesSchema>;
 export type LimitsConfig = z.infer<typeof LimitsSchema>;
 export type LlmConfig = z.infer<typeof LlmSchema>;
 export type ScoringConfig = z.infer<typeof ScoringSchema>;

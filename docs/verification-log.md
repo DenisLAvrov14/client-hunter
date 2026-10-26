@@ -108,3 +108,22 @@ Google Maps/Places, 2ГИС, Яндекс, LinkedIn/Facebook/Instagram, всё �
 | Reddit | `robots.txt`: `User-agent: * Disallow: /`; Public Content Policy ограничивает использование | ❌ без официального API-доступа не используем |
 | Госзакупки KZ (goszakup.gov.kz) | API требует токен (регистрация) | ⏸ не подключено |
 | Upwork и площадки с платными откликами | условие оператора | ❌ не основной источник |
+
+---
+
+## Новые источники заказчиков (форумы владельцев бизнеса) — проверено 2026-10-26, ждёт подтверждения оператора
+
+Для `npm run intent`, лент `sources.forums` в `config/intent.yaml`. Читаем только публичные ленты и JSON. Без логина, без поиска по сайту и без публикаций.
+
+| Источник | Проверка | Вывод |
+|---|---|---|
+| UK Business Forums (XenForo) | `robots.txt` для `*` запрещает `/account/`, `/login/`, `/search/`, `/goto/`, `/attachments/` и т. п.; `/forums/` и RSS `/forums/<раздел>.<id>/index.rss` разрешены. В RSS — заголовок, дата, автор, первое сообщение | ✅ 5 разделов, по 1 запросу на раздел за запуск |
+| HigherLevel.nl (Invision) | `robots.txt` без запретов; общая RSS-лента `/rss/2-forum.xml/` (100 последних тем, первое сообщение и дата создания темы) | ✅ 1 запрос за запуск |
+| Shopify Community (Discourse) | `robots.txt` для `*` запрещает `/search`, `/admin/`, `/u/`-API, `*.rss`; `/c/…json` и `/t/<id>.json` разрешены | ✅ задержка 3 с на домен; в загруженных разделах читаются только темы с заголовком-запросом |
+| Bubble / n8n / Make (Discourse) | как выше | ⏸ вторичные (`--secondary`): в основном запросы под их платформы |
+| Indie Hackers | `robots.txt` прямо запрещает `ClaudeBot`, `Claude-SearchBot`, `anthropic-ai` | ❌ не используем |
+| Squarespace Forum | `robots.txt`: `claudebot`, `anthropic-ai` — `Disallow: /` | ❌ не используем |
+| boards.ie | страница проверки Cloudflare («Just a moment…») | ❌ обходить нельзя |
+| Digital Point Forums | список разделов не отдаётся без JavaScript | ⏸ не подключено |
+| Upscale Method | HTTP 403 и на `robots.txt`, и на страницы | ❌ |
+| Reddit (в т. ч. через поиск) | `robots.txt` `Disallow: /`; поисковый инструмент отказывает для reddit.com | ❌ |

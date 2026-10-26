@@ -1,0 +1,87 @@
+# Service Capability Profile — the one place that says what we deliver (docs/decisions.md 2026-10-26).
+# Used by buyer-intent discovery (npm run intent) to judge technology fit. All terms lower-case,
+# matched as whole words / phrases.
+#   technologies — names a buyer may write ("shopify", "next.js")
+#   services     — business problems in the buyer's own words, so a request that names no technology
+#                  ("need a customer portal", "add multiple languages to our store") still matches
+# fit: core = we deliver it; conditional = adjacent work we can take on, never claimed as expertise.
+
+areas:
+  shopify_ecommerce:
+    label: "Shopify и e-commerce"
+    fit: core
+    technologies: [shopify, shopify plus, liquid, klaviyo, shopify app, shopify apps, shopify theme, dawn theme, hydrogen, storefront api, shopify api, shopify flow]
+    services: [online store, online shop, e-commerce store, ecommerce store, ecommerce site, e-commerce site, ecommerce website,
+      e-commerce website, webshop, web shop, product page, collection page, cart page, checkout customization,
+      custom section, custom sections, theme customization, theme customisation, store redesign, figma to shopify,
+      inventory sync, order sync, product sync, product feed, abandoned cart, email flows, klaviyo flows, multi-currency,
+      multi-market, shopify markets, store migration, migrate my store, move my store, move our store, migrate our store]
+  fullstack_web:
+    label: "Full-stack веб-разработка"
+    fit: core
+    technologies: [react, next.js, nextjs, javascript, typescript, node, node.js, nodejs, postgres, postgresql, rest api, docker, express, nestjs,
+      full-stack, full stack, fullstack, frontend, front-end, backend, back-end, web developer, web development]
+    services: [website, company website, business website, web app, web application, web platform, saas, mvp, minimum viable product,
+      customer portal, client portal, member portal, portal, dashboard, admin panel, admin system, back office, backoffice,
+      internal tool, internal system, booking system, reservation system, management system, crm system, cms,
+      content management, user accounts, database, reporting dashboard, analytics dashboard, new feature, new features,
+      bug fixing, bug fixes, maintenance, custom software, bespoke software]
+  integrations_automation:
+    label: "Интеграции и автоматизация"
+    fit: core
+    technologies: [api, apis, webhook, webhooks, stripe, telegram bot, oauth, rest, graphql, hubspot api, xero api]
+    services: [integration, integrations, integrate, connect our crm, connect our website, connect our shop, sync, synchronise,
+      synchronize, automate, automation, automations, automated, workflow automation, business process automation,
+      order automation, automate orders, notifications, scheduled jobs, background jobs, data processing, data import,
+      csv import, erp integration, crm integration, telegram, chatbot, bot]
+  i18n:
+    label: "Мультиязычность и локализация"
+    fit: core
+    technologies: [i18n, internationalization, internationalisation, next-intl, react-intl, i18next, hreflang, rtl]
+    services: [multilingual, multi-language, multiple languages, several languages, second language, language switcher,
+      language selector, translated version, localization, localisation, localized, localised, regional store, translations]
+  migration_modernization:
+    label: "Миграция и модернизация"
+    fit: core
+    technologies: [legacy]
+    services: [migration, migrate, migrating, replatform, re-platform, rebuild, rebuilding, redesign, modernise, modernize,
+      modernization, modernisation, old website, outdated website, move to shopify, move from wix, move from squarespace,
+      move from woocommerce, move from magento, mobile responsive, responsive design, refactor, upgrade our website]
+  payments_auth:
+    label: "Платежи, авторизация, аккаунты"
+    fit: core
+    technologies: [stripe, paypal api, sso, oauth, auth0, clerk, supabase auth]
+    services: [online payments, payment integration, payment gateway, subscriptions, subscription billing, recurring payments,
+      recurring billing, membership, memberships, customer accounts, customer login, user login, user roles, permissions, billing portal]
+  frontend_seo:
+    label: "Фронтенд, UI и техническое SEO"
+    fit: core
+    technologies: [figma, html, css, tailwind, core web vitals, schema markup, structured data, sitemap, canonical]
+    services: [figma to code, landing page, responsive, page speed, site speed, slow website, performance optimisation,
+      performance optimization, technical seo, accessibility, wcag, interactive section]
+  adjacent:
+    label: "Смежное (по условию)"
+    fit: conditional
+    technologies: [wordpress, woocommerce, elementor, wix, squarespace, webflow, bigcommerce, salesforce, zoho, odoo, sage,
+      xero, quickbooks, pipedrive, mailchimp, brevo, php, laravel, python, django, vue, nuxt, supabase, firebase, airtable]
+    services: [plugin, wordpress site, wordpress website, woocommerce store]
+
+# Work we do not take, or only when the buyer accepts our stack. "platform" terms make a request a
+# poor fit only when MANDATORY (in the title, or "must"/"expert"/"<term> developer"); a passing mention is conditional.
+poor_fit:
+  platforms: [bubble, bubble.io, weweb, n8n, make.com, integromat, zapier, flutterflow, glide, softr, adalo, outsystems, power apps,
+    appsheet, retool, gohighlevel]
+  native_mobile: [ios app, android app, swift, swiftui, kotlin, objective-c, native app, app store, play store, react native, flutter]
+  games: [unity, unreal, unreal engine, game development, godot]
+  specialist_platforms: [magento, magento 2, adobe commerce, sap, dynamics 365, sitecore, salesforce commerce cloud]
+  enterprise_stack: [java, spring boot, .net, c#, asp.net, cobol]
+  data_science: [machine learning research, data scientist, deep learning, model training, computer vision]
+  # Not development at all: design, marketing, content, people.
+  non_dev: [logo, logo design, branding, brand identity, graphic design, illustration, seo services, seo campaign, seo specialist, seo expert, seo consultant, seo agency, link building,
+    backlinks, ppc, google ads, facebook ads, meta ads, ad campaigns, social media manager, social media management,
+    copywriting, copywriter, content writer, translation services, translator, proofreading, virtual assistant, bookkeeping,
+    accountant, video editing, photography, voiceover, web hosting, web host, webhost, hosting, hosting provider, domain name,
+    mailbox, mailboxes, email hosting]
+  # Phrases that let a buyer accept another implementation ("or similar", "open to suggestions").
+  alternatives_ok: [or similar, or equivalent, open to suggestions, open to alternatives, any stack, any technology,
+    technology agnostic, tech agnostic, doesn't have to be, does not have to be, happy to consider, other platforms]

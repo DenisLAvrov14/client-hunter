@@ -15,6 +15,8 @@ export interface FetchOptions {
   method?: 'GET' | 'HEAD';
   /** Skip reading the body (link checks). */
   discardBody?: boolean;
+  /** Accept header for API endpoints (Discourse answers a JSON URL requested as HTML with 403). */
+  accept?: string;
 }
 
 export interface Fetcher {
@@ -132,7 +134,7 @@ export class HttpFetcher implements Fetcher {
           redirect: 'manual',
           headers: {
             'user-agent': this.opts.userAgent,
-            accept: 'text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.5',
+            accept: fetchOpts.accept ?? 'text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.5',
             'accept-language': 'en-GB,en;q=0.8',
           },
           signal: AbortSignal.timeout(this.opts.timeoutMs),
